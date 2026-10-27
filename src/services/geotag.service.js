@@ -73,6 +73,18 @@ export class GeoTagService {
 
     return this._request('/device/getHistory', payload);
   }
+
+  /**
+   * Fetch failed webhook records (up to 7 days)
+   * @param {Object} options { page, pageSize, beginTime, endTime, sn }
+   */
+  async getWebHookFail({ page = 1, pageSize = 20, beginTime, endTime, sn } = {}) {
+    const payload = { page, pageSize };
+    if (beginTime) payload.beginTime = beginTime;
+    if (endTime) payload.endTime = endTime;
+    if (sn) payload.sn = sn;
+    return this._request('/device/getWebHookFail', payload);
+  }
 }
 
 // Export default singleton instance

@@ -5,10 +5,19 @@ import {
   getDeviceDetail,
   getDeviceHistory,
 } from '../controllers/geotag.controller.js';
+import { handleGeoTagWebhook } from '../controllers/webhook.controller.js';
 
 const router = Router();
 
-// Apply authentication middleware to all raw cloud endpoints
+// ==============================================================
+// 1. PUBLIC WEBHOOK RECEIVER (Called by GeoTag Cloud)
+// Authenticated via GeoTag asymmetric RSA key decryption
+// ==============================================================
+router.post('/geotag/webhook', handleGeoTagWebhook);
+
+// ==============================================================
+// 2. PROTECTED INTERNAL ROUTES (Require Credence JWT)
+// ==============================================================
 router.use(authenticateUser);
 
 // GET /api/devices - List devices directly from GeoTag Cloud

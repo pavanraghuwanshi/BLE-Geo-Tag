@@ -11,12 +11,6 @@ const bleDeviceSchema = new mongoose.Schema(
       required: true,
       trim: true,
     },
-    uniqueId: {
-      type: String,
-      required: true,
-      unique: true,
-      trim: true,
-    },
     sn: {
       type: String,
       required: true,
@@ -35,23 +29,27 @@ const bleDeviceSchema = new mongoose.Schema(
     },
     model: {
       type: String,
-      default: 'GeoTag',
+      trim: true,
+      default: '',
     },
     category: {
       type: String,
-      default: 'BLE',
+      trim: true,
+      default: 'GeoTag',
     },
     status: {
       type: String,
-      default: 'active',
+      trim: true,
+      default: '',
     },
     battery: {
       type: Number,
-      default: 100,
+      default: null,
     },
     batteryStatus: {
       type: String,
-      default: 'OK',
+      trim: true,
+      default: '',
     },
     // Latest Location snapshot (no history stored as requested)
     lastLocation: {

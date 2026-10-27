@@ -100,10 +100,10 @@ export const getBLEDevices = async (req, res) => {
     if (search) {
       match.$or = [
         { name: { $regex: search, $options: "i" } },
-        { uniqueId: { $regex: search, $options: "i" } },
         { sn: { $regex: search, $options: "i" } },
         { mac: { $regex: search, $options: "i" } },
         { model: { $regex: search, $options: "i" } },
+        { category: { $regex: search, $options: "i" } },
         { "lastLocation.address": { $regex: search, $options: "i" } },
       ];
     }
@@ -114,7 +114,6 @@ export const getBLEDevices = async (req, res) => {
     // Sorting fields mapping
     const sortFields = {
       name: "name",
-      uniqueId: "uniqueId",
       sn: "sn",
       mac: "mac",
       battery: "battery",
@@ -186,7 +185,6 @@ export const getBLEDevices = async (req, res) => {
         $project: {
           _id: 1,
           name: 1,
-          uniqueId: 1,
           sn: 1,
           mac: 1,
           uuid: 1,
@@ -310,8 +308,8 @@ export const getLiveTrack = async (req, res) => {
 
         // Update DB snapshot
         device.lastLocation = livePoint;
-        device.battery = latest.battery || device.battery;
-        device.batteryStatus = latest.batteryStatus || device.batteryStatus;
+        if (latest.battery !== undefined) device.battery = latest.battery;
+        if (latest.batteryStatus !== undefined) device.batteryStatus = latest.batteryStatus;
         device.lastUpdate = new Date();
         await device.save();
       }
@@ -378,6 +376,7 @@ export const getLiveTrackAll = async (req, res) => {
     sortBy = "updatedAt",
     sortOrder = "desc",
     all = false,
+    refresh = false,
   } = req.query;
 
   try {
@@ -430,9 +429,10 @@ export const getLiveTrackAll = async (req, res) => {
     if (search) {
       match.$or = [
         { name: { $regex: search, $options: "i" } },
-        { uniqueId: { $regex: search, $options: "i" } },
         { sn: { $regex: search, $options: "i" } },
         { mac: { $regex: search, $options: "i" } },
+        { model: { $regex: search, $options: "i" } },
+        { category: { $regex: search, $options: "i" } },
         { "lastLocation.address": { $regex: search, $options: "i" } },
       ];
     }
@@ -455,6 +455,45 @@ export const getLiveTrackAll = async (req, res) => {
     }
 
     const devices = await query;
+
+    // If refresh=true requested, fetch fresh telemetry from GeoTag cloud in parallel
+    if (refresh === "true" || refresh === true) {
+      await Promise.allSettled(
+        devices.map(async (d) => {
+          try {
+            const cloudHist = await geotagService.getDeviceHistory(d.sn);
+            if (cloudHist?.list && cloudHist.list.length > 0) {
+              const latest = cloudHist.list[0];
+              d.lastLocation = {
+                lat: latest.lat,
+                lng: latest.lng,
+                address: latest.address,
+                reportedTime: latest.reportedTime ? new Date(latest.reportedTime) : new Date(),
+                locationTime: latest.locationTime ? new Date(latest.locationTime) : new Date(),
+                accuracy: latest.accuracy,
+                confidence: latest.confidence,
+              };
+              if (latest.battery !== undefined) d.battery = latest.battery;
+              if (latest.batteryStatus !== undefined) d.batteryStatus = latest.batteryStatus;
+              d.lastUpdate = new Date();
+              await BLEDevice.updateOne(
+                { _id: d._id },
+                {
+                  $set: {
+                    lastLocation: d.lastLocation,
+                    battery: d.battery,
+                    batteryStatus: d.batteryStatus,
+                    lastUpdate: d.lastUpdate,
+                  },
+                }
+              );
+            }
+          } catch (err) {
+            // keep existing cached point
+          }
+        })
+      );
+    }
 
     const liveMarkers = devices.map((d) => ({
       _id: d._id,
@@ -585,6 +624,43 @@ export const getParentBLEDevice = async (req, res) => {
     // Find BLE devices assigned to any of these children
     const devices = await BLEDevice.find({ childId: { $in: childIds }, isActive: true });
 
+    // Always fetch freshest live coordinates & battery from GeoTag cloud for parent view
+    await Promise.allSettled(
+      devices.map(async (dev) => {
+        try {
+          const cloudHist = await geotagService.getDeviceHistory(dev.sn);
+          if (cloudHist?.list && cloudHist.list.length > 0) {
+            const latest = cloudHist.list[0];
+            dev.lastLocation = {
+              lat: latest.lat,
+              lng: latest.lng,
+              address: latest.address,
+              reportedTime: latest.reportedTime ? new Date(latest.reportedTime) : new Date(),
+              locationTime: latest.locationTime ? new Date(latest.locationTime) : new Date(),
+              accuracy: latest.accuracy,
+              confidence: latest.confidence,
+            };
+            if (latest.battery !== undefined) dev.battery = latest.battery;
+            if (latest.batteryStatus !== undefined) dev.batteryStatus = latest.batteryStatus;
+            dev.lastUpdate = new Date();
+            await BLEDevice.updateOne(
+              { _id: dev._id },
+              {
+                $set: {
+                  lastLocation: dev.lastLocation,
+                  battery: dev.battery,
+                  batteryStatus: dev.batteryStatus,
+                  lastUpdate: dev.lastUpdate,
+                },
+              }
+            );
+          }
+        } catch (err) {
+          // keep cached location
+        }
+      })
+    );
+
     const result = devices.map((dev) => {
       const matchedChild = children.find((c) => String(c._id) === String(dev.childId));
       return {
@@ -623,6 +699,8 @@ export const assignBLEDevice = async (req, res) => {
   const { id } = req.params;
   const {
     name,
+    model,
+    category,
     schoolId,
     branchId,
     supervisorId,
@@ -635,6 +713,8 @@ export const assignBLEDevice = async (req, res) => {
   try {
     const update = {};
     if (name !== undefined) update.name = name;
+    if (model !== undefined) update.model = model;
+    if (category !== undefined) update.category = category;
     if (schoolId !== undefined) update.schoolId = schoolId ? new ObjectId(schoolId) : null;
     if (branchId !== undefined) update.branchId = branchId ? new ObjectId(branchId) : null;
     if (supervisorId !== undefined) update.supervisorId = supervisorId ? new ObjectId(supervisorId) : null;
@@ -643,7 +723,7 @@ export const assignBLEDevice = async (req, res) => {
     if (status !== undefined) update.status = status;
     if (isActive !== undefined) update.isActive = isActive;
 
-    const device = await BLEDevice.findByIdAndUpdate(id, update, { new: true });
+    const device = await BLEDevice.findByIdAndUpdate(id, update, { returnDocument: 'after' });
     if (!device) {
       return res.status(404).json({ success: false, message: "BLE Device not found" });
     }
@@ -673,8 +753,8 @@ export const syncFromGeoTagCloud = async (req, res) => {
     for (const d of cloudDevices) {
       try {
         let lastLoc = null;
-        let battery = 100;
-        let batteryStatus = "OK";
+        let battery = null;
+        let batteryStatus = "";
 
         try {
           const hist = await geotagService.getDeviceHistory(d.sn);
@@ -689,29 +769,38 @@ export const syncFromGeoTagCloud = async (req, res) => {
               accuracy: latest.accuracy,
               confidence: latest.confidence,
             };
-            battery = latest.battery || 100;
-            batteryStatus = latest.batteryStatus || "OK";
+            battery = latest.battery !== undefined ? latest.battery : null;
+            batteryStatus = latest.batteryStatus || "";
           }
         } catch (err) {
           // Continue if history fetch fails
         }
 
+        const cloudStatus = d.status !== undefined ? (d.status === 1 || d.status === '1' || d.status === 'active' ? 'active' : String(d.status)) : '';
+
+        const updateSet = {
+          mac: d.mac || "",
+          uuid: d.uuid || "",
+          lastLocation: lastLoc,
+          lastUpdate: new Date(),
+        };
+        if (battery !== null) updateSet.battery = battery;
+        if (batteryStatus) updateSet.batteryStatus = batteryStatus;
+        if (cloudStatus) updateSet.status = cloudStatus;
+        if (d.model) updateSet.model = d.model;
+
         await BLEDevice.findOneAndUpdate(
           { sn: d.sn },
           {
-            $set: {
-              uniqueId: d.sn,
-              mac: d.mac || "",
-              uuid: d.uuid || "",
-              battery,
-              batteryStatus,
-              lastLocation: lastLoc,
-              lastUpdate: new Date(),
-            },
+            $set: updateSet,
             $setOnInsert: {
               name: d.sn,
-              status: "active",
+              status: cloudStatus || "active",
               isActive: true,
+              category: "GeoTag",
+              model: d.model || "",
+              battery,
+              batteryStatus,
               schoolId: null,
               branchId: null,
               supervisorId: null,

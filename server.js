@@ -4,6 +4,7 @@ import { connectDB } from './src/Database/db.js';
 import geotagRoutes from './src/routes/geotag.routes.js';
 import bleDeviceRoutes from './src/routes/bleDevice.routes.js';
 import { geotagService } from './src/services/geotag.service.js';
+import { startTelemetrySyncWorker } from './src/services/telemetrySync.service.js';
 
 const app = express();
 
@@ -50,6 +51,10 @@ async function bootstrap() {
     try {
       const list = await geotagService.getDeviceList({ page: 1, pageSize: 1 });
       console.log(`✅ GeoTag Cloud Connection: OK (Found ${list.total || 0} registered devices)`);
+      
+      // Start background telemetry sync worker (default: 60 seconds)
+      const syncIntervalSec = Number(process.env.TELEMETRY_SYNC_INTERVAL_SEC) || 60;
+      startTelemetrySyncWorker(syncIntervalSec);
     } catch (err) {
       console.warn(`⚠️ GeoTag Connection Warning: ${err.message}`);
     }

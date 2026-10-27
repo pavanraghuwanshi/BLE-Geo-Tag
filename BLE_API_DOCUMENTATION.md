@@ -207,6 +207,7 @@ Returns live coordinates, address, and battery for **all devices visible to the 
 | `batteryStatus` | `String` | `""` | Filter by battery status (`OK`, `LOW`) |
 | `isAssigned` | `Boolean` | - | `true` for assigned devices, `false` for unassigned tags |
 | `hasLocation` | `Boolean` | - | `true` to return only devices that have reported live GPS coordinates |
+| `refresh` | `Boolean` | `false` | Pass `true` to force live parallel refresh of coordinates & battery directly from GeoTag Cloud |
 | `sortBy` | `String` | `"updatedAt"`| Sort by: `updatedAt`, `name`, `battery` |
 | `sortOrder` | `String` | `"desc"` | Sort direction: `asc` or `desc` |
 
@@ -411,6 +412,29 @@ Direct pass-through endpoints to inspect raw GeoTag cloud responses.
 - `GET /api/devices/:sn/history` - Raw location history array from cloud
 
 *Requires: `Authorization: Bearer <TOKEN>` with `superAdmin` role.*
+
+---
+
+### 8. GeoTag Cloud Webhook (Real-Time Push)
+
+GeoTag Cloud officially supports real-time webhooks. When enabled, **GeoTag immediately pushes data to your server the moment a tag reports a new location or battery level**, eliminating the need for constant background polling.
+
+- **Webhook URL:** `POST /api/geotag/webhook`
+- **Authentication:** Public (No JWT header needed; securely authenticated via GeoTag RSA asymmetric key decryption).
+- **Setup in GeoTag Portal:**
+  1. Open your GeoTag Enterprise Dashboard.
+  2. Navigate to **API Settings / Webhook Configuration**.
+  3. Enter your server's Webhook URL:
+     ```
+     https://api.yourdomain.com/api/geotag/webhook
+     ```
+  4. Save the configuration.
+
+#### What happens on incoming Webhook:
+* Automatically decrypts payload using your `merchant_private.pem`.
+* Updates `lastLocation` (lat, lng, address, timestamps, accuracy) and `battery` / `batteryStatus` in MongoDB.
+* **100% Preserves your custom `category`** (`"ID Card"`, `"Bag"`), custom `name`, and school/branch/child hierarchy assignments.
+* Returns `{ "code": 200, "msg": "success" }` to GeoTag Cloud.
 
 ---
 
