@@ -1,0 +1,5 @@
+{
+  "watch": ["src", "server.js", ".env"],
+  "ext": "js,json",
+  "exec": "node --security-revert=CVE-2023-46809 server.js"
+}

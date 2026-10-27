@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+package-lock.json.bak
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+.env.example
+
+# Sensitive keys and certificates
+keys/*.pem
+*.pem
+*.key
+*.cert
+*.crt
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Runtime data & PID files
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# PM2 & Process monitoring
+.pm2/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# IDE & Editor folders
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+
+# Temporary folders & caches
+tmp/
+temp/
+.cache/
