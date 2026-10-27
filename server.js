@@ -13,7 +13,6 @@ app.use(express.json());
 app.get('/health', (req, res) => {
   res.json({
     status: 'ok',
-    businessNo: config.businessNo,
     timestamp: new Date().toISOString(),
   });
 });
