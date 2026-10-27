@@ -1,4 +1,5 @@
 import express from 'express';
+import cors from 'cors';
 import { config } from './src/config/geotag.config.js';
 import { connectDB } from './src/Database/db.js';
 import geotagRoutes from './src/routes/geotag.routes.js';
@@ -7,6 +8,9 @@ import { geotagService } from './src/services/geotag.service.js';
 import { startTelemetrySyncWorker } from './src/services/telemetrySync.service.js';
 
 const app = express();
+
+// Enable CORS for frontend applications
+app.use(cors());
 
 app.use(express.json());
 

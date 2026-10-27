@@ -6,16 +6,13 @@ This documentation covers the BLE GeoTag device integration APIs for the **Front
 
 ## 🔐 Authentication & Roles
 
-These APIs integrate with Credence's existing JWT Auth middleware (`req.user`).  
-For local development or Postman testing, you can also pass headers or query params:
+All BLE Device APIs are protected and require a standard Credence JWT token in the `Authorization` header:
 
-### Header Parameters:
-| Header | Description | Default |
-| :--- | :--- | :--- |
-| `Authorization` | `Bearer <JWT_TOKEN>` | Required in Production |
-| `x-role` | User role (`superAdmin`, `school`, `branchGroup`, `branch`, `supervisor`, `parent`) | `superAdmin` |
-| `x-user-id` | MongoDB `_id` of the logged-in entity (school, branch, parent, etc.) | Optional |
-| `x-assigned-branch` | JSON array of branch IDs for `branchGroup` role (e.g., `["64f..."]`) | Optional |
+```http
+Authorization: Bearer <JWT_TOKEN>
+```
+
+The user's role (`superAdmin`, `school`, `branchGroup`, `branch`, `supervisor`, `parent`), user ID, and hierarchy permissions are automatically extracted and verified from the token.
 
 ---
 
@@ -138,7 +135,7 @@ Fetches the live GPS/BLE location point of a device. It checks GeoTag cloud in r
 ```http
 GET /api/ble-devices/live/GeoTag-57559208 HTTP/1.1
 Host: localhost:4000
-x-role: superAdmin
+Authorization: Bearer <JWT_TOKEN>
 ```
 
 #### Response Example (200 OK):
@@ -290,8 +287,7 @@ Convenience endpoint designed specifically for the Parent mobile app / web porta
 ```http
 GET /api/ble-devices/parent/my-device HTTP/1.1
 Host: localhost:4000
-x-role: parent
-x-user-id: 67161021f7c469273c524110
+Authorization: Bearer <PARENT_JWT_TOKEN>
 ```
 
 #### Response Example (200 OK):
