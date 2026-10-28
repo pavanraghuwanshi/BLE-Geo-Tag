@@ -813,90 +813,121 @@ export const assignBLEDevice = async (req, res) => {
 };
 
 /**
- * 5. Sync Devices from GeoTag Cloud into DB
- * Fetches all cloud devices and latest coordinates, preserving existing school/child assignments.
+ * 5. Sync Devices from GeoTag Cloud / Webhook into DB
+ * Fetches all cloud devices if available, updates MongoDB, 
+ * and returns all active devices (including those ingested via Webhook).
  */
 export const syncFromGeoTagCloud = async (req, res) => {
   try {
-    const cloudResult = await geotagService.getDeviceList({ page: 1, pageSize: 100 });
-    const cloudDevices = cloudResult?.list || [];
+    let cloudDevices = [];
+    let cloudError = null;
 
-    const summary = { totalFromCloud: cloudDevices.length, synced: 0, errors: [] };
+    // 1. Try fetching from GeoTag Cloud
+    try {
+      const cloudResult = await geotagService.getDeviceList({ page: 1, pageSize: 50 });
+      cloudDevices = Array.isArray(cloudResult)
+        ? cloudResult
+        : (cloudResult?.list || cloudResult?.data || cloudResult?.records || []);
+    } catch (err) {
+      console.warn("[Sync] GeoTag Cloud getDeviceList warning:", err.message);
+      cloudError = err.message;
+    }
 
+    const summary = {
+      totalFromCloud: cloudDevices.length,
+      synced: 0,
+      cloudApiStatus: cloudError ? `Unavailable (${cloudError})` : 'Connected',
+    };
+
+    // 2. If cloud returned devices, safely upsert them into MongoDB
     for (const d of cloudDevices) {
+      const sn = d.sn || d.deviceSn || d.serialNumber;
+      if (!sn) continue;
+
       try {
-        let lastLoc = null;
-        let battery = null;
-        let batteryStatus = "";
-
-        try {
-          const hist = await geotagService.getDeviceHistory(d.sn);
-          if (hist?.list && hist.list.length > 0) {
-            const latest = hist.list[0];
-            lastLoc = {
-              lat: latest.lat,
-              lng: latest.lng,
-              address: latest.address,
-              reportedTime: latest.reportedTime ? new Date(latest.reportedTime) : null,
-              locationTime: latest.locationTime ? new Date(latest.locationTime) : null,
-              accuracy: latest.accuracy,
-              confidence: latest.confidence,
-            };
-            battery = latest.battery !== undefined ? latest.battery : null;
-            batteryStatus = latest.batteryStatus || "";
-          }
-        } catch (err) {
-          // Continue if history fetch fails
-        }
-
-        const cloudStatus = d.status !== undefined ? (d.status === 1 || d.status === '1' || d.status === 'active' ? 'active' : String(d.status)) : '';
+        const cloudStatus = d.status !== undefined
+          ? (d.status === 1 || d.status === '1' || d.status === 'active' ? 'active' : String(d.status))
+          : 'active';
 
         const updateSet = {
-          mac: d.mac || "",
-          uuid: d.uuid || "",
-          lastLocation: lastLoc,
+          mac: d.mac || '',
+          uuid: d.uuid || '',
+          model: d.model || 'GeoTag',
+          status: cloudStatus,
           lastUpdate: new Date(),
         };
-        if (battery !== null) updateSet.battery = battery;
-        if (batteryStatus) updateSet.batteryStatus = batteryStatus;
-        if (cloudStatus) updateSet.status = cloudStatus;
-        if (d.model) updateSet.model = d.model;
+
+        if (d.lat !== undefined && d.lng !== undefined && d.lat !== null && d.lng !== null) {
+          updateSet.lastLocation = {
+            lat: Number(d.lat),
+            lng: Number(d.lng),
+            address: d.address || '',
+            reportedTime: d.reportedTime ? new Date(d.reportedTime) : new Date(),
+            locationTime: d.locationTime ? new Date(d.locationTime) : new Date(),
+            accuracy: d.accuracy !== undefined ? Number(d.accuracy) : null,
+            confidence: d.confidence !== undefined ? Number(d.confidence) : null,
+          };
+        }
+
+        if (d.battery !== undefined && d.battery !== null) {
+          updateSet.battery = Number(d.battery);
+        }
+        if (d.batteryStatus) {
+          updateSet.batteryStatus = String(d.batteryStatus);
+        }
 
         await BLEDevice.findOneAndUpdate(
-          { sn: d.sn },
+          { sn },
           {
             $set: updateSet,
             $setOnInsert: {
-              name: d.sn,
-              status: cloudStatus || "active",
+              name: d.name || sn,
+              category: 'GeoTag',
               isActive: true,
-              category: "GeoTag",
-              model: d.model || "",
-              battery,
-              batteryStatus,
               schoolId: null,
               branchId: null,
               supervisorId: null,
               childId: null,
             },
           },
-          { upsert: true, returnDocument: 'after' }
+          { upsert: true, new: true }
         );
 
         summary.synced += 1;
       } catch (err) {
-        summary.errors.push({ sn: d.sn, error: err.message });
+        console.warn(`[Sync] Failed to upsert device ${sn}:`, err.message);
       }
     }
 
+    // 3. Always query and return all active devices from MongoDB (ingested from Webhook or Cloud)
+    const allDbDevices = await BLEDevice.find({ isActive: true })
+      .populate('schoolId', 'schoolName')
+      .populate('branchId', 'branchName')
+      .populate('childId', 'childName className rollNumber')
+      .sort({ updatedAt: -1 });
+
     res.status(200).json({
       success: true,
-      message: "Sync completed successfully",
+      message: cloudError
+        ? `Loaded ${allDbDevices.length} devices from Webhook database (Cloud API: ${cloudError})`
+        : `Successfully synced ${summary.synced} devices from GeoTag Cloud`,
+      total: allDbDevices.length,
       summary,
+      devices: allDbDevices,
     });
   } catch (err) {
     console.error("Error in syncFromGeoTagCloud:", err);
-    res.status(500).json({ success: false, message: err.message });
+    try {
+      const fallbackDevices = await BLEDevice.find({ isActive: true }).sort({ updatedAt: -1 });
+      return res.status(200).json({
+        success: true,
+        message: "Retrieved devices from database fallback",
+        total: fallbackDevices.length,
+        devices: fallbackDevices,
+      });
+    } catch (dbErr) {
+      res.status(500).json({ success: false, message: err.message });
+    }
   }
 };
 

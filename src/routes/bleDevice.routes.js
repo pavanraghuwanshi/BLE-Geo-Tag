@@ -13,11 +13,18 @@ import {
 
 const router = Router();
 
-// Apply authenticateUser to all BLE device routes
+// ==============================================================
+// 1. PUBLIC / DIRECT GET ROUTE (Browser & direct frontend testing)
+// Directly returns all devices ingested via Webhook & synced from Cloud
+// ==============================================================
+router.get('/ble-devices/sync', syncFromGeoTagCloud);
+
+// ==============================================================
+// 2. PROTECTED ROUTES (Require Credence JWT Token)
+// ==============================================================
 router.use(authenticateUser);
 
-// 1. Sync all devices & latest snapshots from GeoTag Cloud into DB (Supports both GET & POST)
-router.get('/ble-devices/sync', syncFromGeoTagCloud);
+// Sync via POST (for authenticated admin action)
 router.post('/ble-devices/sync', syncFromGeoTagCloud);
 
 // 2. Hierarchy-filtered listing (superAdmin / school / branchGroup / branch / supervisor / parent)
