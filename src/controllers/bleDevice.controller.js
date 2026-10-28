@@ -314,7 +314,7 @@ export const getLiveTrack = async (req, res) => {
         await device.save();
       }
     } catch (cloudErr) {
-      console.warn(`[LiveTrack] Cloud fetch notice: ${cloudErr.message}, falling back to DB cache`);
+      // Fallback silently to DB cache
     }
 
     // Populate metadata for response
