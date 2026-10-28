@@ -186,6 +186,7 @@ export const getBLEDevices = async (req, res) => {
           _id: 1,
           name: 1,
           sn: 1,
+          deviceId: 1,
           mac: 1,
           uuid: 1,
           model: 1,
@@ -498,6 +499,7 @@ export const getLiveTrackAll = async (req, res) => {
     const liveMarkers = devices.map((d) => ({
       _id: d._id,
       sn: d.sn,
+      deviceId: d.deviceId || null,
       name: d.name,
       battery: d.battery,
       batteryStatus: d.batteryStatus,
@@ -849,6 +851,10 @@ export const syncFromGeoTagCloud = async (req, res) => {
           ? (d.status === 1 || d.status === '1' || d.status === 'active' ? 'active' : String(d.status))
           : 'active';
 
+        const deviceId = d.id !== undefined && d.id !== null
+          ? String(d.id)
+          : (d.deviceId ? String(d.deviceId) : '');
+
         const updateSet = {
           mac: d.mac || '',
           uuid: d.uuid || '',
@@ -856,6 +862,10 @@ export const syncFromGeoTagCloud = async (req, res) => {
           status: cloudStatus,
           lastUpdate: new Date(),
         };
+
+        if (deviceId) {
+          updateSet.deviceId = deviceId;
+        }
 
         if (d.lat !== undefined && d.lng !== undefined && d.lat !== null && d.lng !== null) {
           updateSet.lastLocation = {

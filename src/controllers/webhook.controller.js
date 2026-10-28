@@ -57,7 +57,14 @@ export const handleGeoTagWebhook = async (req, res) => {
       updateSet.batteryStatus = String(payload.batteryStatus);
     }
 
-    // 3. Atomically update MongoDB document
+    // Always capture 'id' from source payload and store/update as 'deviceId'
+    if (payload.id !== undefined && payload.id !== null && String(payload.id).trim() !== '') {
+      updateSet.deviceId = String(payload.id).trim();
+    } else if (payload.deviceId !== undefined && payload.deviceId !== null && String(payload.deviceId).trim() !== '') {
+      updateSet.deviceId = String(payload.deviceId).trim();
+    }
+
+    // 3. Atomically update MongoDB document (always updates deviceId if changed from source)
     await BLEDevice.findOneAndUpdate(
       { sn: payload.sn },
       {
@@ -74,7 +81,7 @@ export const handleGeoTagWebhook = async (req, res) => {
           childId: null,
         },
       },
-      { upsert: true, returnDocument: 'after' }
+      { upsert: true, new: true }
     );
 
     // 4. Acknowledge GeoTag Cloud

@@ -17,6 +17,11 @@ const bleDeviceSchema = new mongoose.Schema(
       unique: true,
       trim: true,
     },
+    deviceId: {
+      type: String,
+      trim: true,
+      default: '',
+    },
     mac: {
       type: String,
       trim: true,
