@@ -59,16 +59,34 @@ export class GeoTagService {
   /**
    * Fetch location history for a device
    * @param {string} sn Device Serial Number (e.g., GeoTag-57559208)
-   * @param {Object} options { beginTime, endTime } (timestamps in ms)
+   * @param {Object} options { beginTime, endTime, startLocationTime, endLocationTime }
    */
-  async getDeviceHistory(sn, { beginTime, endTime } = {}) {
+  async getDeviceHistory(sn, { beginTime, endTime, startLocationTime, endLocationTime } = {}) {
     if (!sn) throw new Error('sn is required');
 
     const now = Date.now();
+    const bTime = beginTime || now - (7 * 24 * 60 * 60 * 1000);
+    const eTime = endTime || now;
+
+    const pad = (n) => String(n).padStart(2, '0');
+    const toDateStr = (ts) => {
+      const d = new Date(ts);
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    };
+
+    const sTimeStr = startLocationTime || toDateStr(bTime);
+    const eTimeStr = endLocationTime || toDateStr(eTime);
+
+    // Provide both numeric timestamps and formatted date strings so GeoTag recognizes either format
     const payload = {
       sn,
-      beginTime: beginTime || now - (7 * 24 * 60 * 60 * 1000), // Default: last 7 days
-      endTime: endTime || now,
+      beginTime: bTime,
+      endTime: eTime,
+      startTime: bTime,
+      startLocationTime: sTimeStr,
+      endLocationTime: eTimeStr,
+      startDate: sTimeStr,
+      endDate: eTimeStr,
     };
 
     return this._request('/device/getHistory', payload);

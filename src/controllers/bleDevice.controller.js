@@ -532,6 +532,42 @@ export const getLiveTrackAll = async (req, res) => {
   }
 };
 
+function parseTimeInput(val) {
+  if (!val) return null;
+  if (typeof val === 'number') {
+    return val < 1e11 ? val * 1000 : val;
+  }
+  const str = String(val).trim();
+  if (/^\d{10,13}$/.test(str)) {
+    const num = Number(str);
+    return num < 1e11 ? num * 1000 : num;
+  }
+  const parsed = new Date(str).getTime();
+  return isNaN(parsed) ? null : parsed;
+}
+
+function extractPointTimestamp(point) {
+  if (!point) return null;
+  const val = point.locationTime || point.reportedTime || point.time || point.timestamp || point.createTime || point.createdAt;
+  if (!val) return null;
+  if (typeof val === 'number') {
+    return val < 1e11 ? val * 1000 : val;
+  }
+  const str = String(val).trim();
+  if (/^\d{10,13}$/.test(str)) {
+    const num = Number(str);
+    return num < 1e11 ? num * 1000 : num;
+  }
+  const parsed = new Date(str).getTime();
+  return isNaN(parsed) ? null : parsed;
+}
+
+function formatGeoTagDate(ts) {
+  const d = new Date(ts);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 /**
  * 2c. Location History for a specific device (Hierarchy-wise)
  * Fetches tracking breadcrumb points from GeoTag Cloud for a given device.
@@ -539,7 +575,17 @@ export const getLiveTrackAll = async (req, res) => {
 export const getDeviceHistoryHierarchy = async (req, res) => {
   const { role, id, AssignedBranch } = getUserContext(req);
   const { identifier } = req.params;
-  const { beginTime, endTime, days = 7 } = req.query;
+  const {
+    beginTime,
+    endTime,
+    from,
+    to,
+    startLocationTime,
+    endLocationTime,
+    startDate,
+    endDate,
+    days = 7,
+  } = req.query;
 
   try {
     let query = {};
@@ -576,12 +622,39 @@ export const getDeviceHistoryHierarchy = async (req, res) => {
     }
 
     const now = Date.now();
-    const parsedBegin = beginTime ? Number(beginTime) : now - (Number(days) * 24 * 60 * 60 * 1000);
-    const parsedEnd = endTime ? Number(endTime) : now;
+    const parsedBegin =
+      parseTimeInput(beginTime) ||
+      parseTimeInput(from) ||
+      parseTimeInput(startLocationTime) ||
+      parseTimeInput(startDate) ||
+      now - (Number(days) * 24 * 60 * 60 * 1000);
+
+    const parsedEnd =
+      parseTimeInput(endTime) ||
+      parseTimeInput(to) ||
+      parseTimeInput(endLocationTime) ||
+      parseTimeInput(endDate) ||
+      now;
+
+    const startLocationTimeStr = formatGeoTagDate(parsedBegin);
+    const endLocationTimeStr = formatGeoTagDate(parsedEnd);
 
     const cloudData = await geotagService.getDeviceHistory(device.sn, {
       beginTime: parsedBegin,
       endTime: parsedEnd,
+      startLocationTime: startLocationTimeStr,
+      endLocationTime: endLocationTimeStr,
+    });
+
+    const rawList = Array.isArray(cloudData)
+      ? cloudData
+      : (cloudData?.list || cloudData?.data || cloudData?.records || cloudData?.rows || []);
+
+    // Filter points strictly between parsedBegin and parsedEnd
+    const filteredHistory = rawList.filter((item) => {
+      const pointTime = extractPointTimestamp(item);
+      if (pointTime === null) return true; // keep if timestamp is missing
+      return pointTime >= parsedBegin && pointTime <= parsedEnd;
     });
 
     res.status(200).json({
@@ -590,8 +663,8 @@ export const getDeviceHistoryHierarchy = async (req, res) => {
       name: device.name,
       battery: device.battery,
       batteryStatus: device.batteryStatus,
-      totalPoints: cloudData?.total || (cloudData?.list || []).length,
-      history: cloudData?.list || [],
+      totalPoints: filteredHistory.length,
+      history: filteredHistory,
     });
   } catch (err) {
     console.error("Error in getDeviceHistoryHierarchy:", err);
