@@ -238,16 +238,30 @@ Returns live coordinates, address, and battery for **all devices visible to the 
 
 ---
 
-### 2c. Device Location History (Hierarchy-Wise)
+### 2c. Device Location History (Trajectory) — Hierarchy-Wise
 
-Fetches historical breadcrumb points for a device. Hierarchy-authorized (e.g., a School or Parent can only view history for devices assigned to them).
+Fetches historical breadcrumb/trajectory points for a device. Hierarchy-authorized (e.g., a School or Parent can only view history for devices assigned to them).
+
+> **How it works:** Validates user role authorization against device assignments (School/Branch/Supervisor/Parent), resolves the device `sn`, and fetches historical points directly from GeoTag Open API authenticated with your merchant RSA keys.
 
 - **URL:** `GET /api/ble-devices/:identifier/history`
-- **URL Parameter:** `:identifier` = MongoDB `_id` OR serial number (e.g. `GeoTag-57559208`).
+- **URL Parameter:** `:identifier` = MongoDB `_id` OR serial number (e.g. `GeoTag-57559208`)
 - **Query Parameters:**
-  - `days`: Number of past days to retrieve (default: `7`)
-  - `beginTime`: Millisecond timestamp
-  - `endTime`: Millisecond timestamp
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `beginTime` | `Number` | 7 days ago | Millisecond timestamp (e.g. `1793125800000`) |
+| `endTime` | `Number` | now | Millisecond timestamp (e.g. `1793212199999`) |
+| `from` | `String` | - | ISO date string (e.g. `2026-10-27T18:30:00.000Z`) |
+| `to` | `String` | - | ISO date string (e.g. `2026-10-28T18:29:59.999Z`) |
+| `days` | `Number` | `7` | Fallback: number of past days if no time range provided |
+
+#### Request Example:
+```http
+GET /api/ble-devices/GeoTag-57559208/history?beginTime=1793125800000&endTime=1793212199999 HTTP/1.1
+Host: localhost:4000
+Authorization: Bearer <JWT_TOKEN>
+```
 
 #### Response Example (200 OK):
 ```json
@@ -272,6 +286,88 @@ Fetches historical breadcrumb points for a device. Hierarchy-authorized (e.g., a
       "batteryStatus": "OK"
     }
   ]
+}
+```
+
+---
+
+### 2d. Device Location History (GeoTag Open API)
+
+Fetches location history directly from the official **GeoTag Open API (`api.geotag.top`)** using RSA asymmetric digital signature & encryption (`merchant_private.pem` + `platformPublicKey`). 
+
+> **Key Features:**
+> - **IST (Indian Standard Time, UTC+05:30) Native:** All dates/times (`date`, `startLocationTime`, `endLocationTime`) sent from frontend are parsed and formatted in **IST**.
+> - **All Data in Range Returned:** Automatically retrieves all records across all pages from GeoTag for the selected time window (no pagination truncation).
+> - **No Web Portal Token Required:** It authenticates server-to-server using merchant credentials, so it never expires and never fails with 401.
+
+- **URL:** `GET /api/devices/:deviceId/history`
+- **URL Parameter:** `:deviceId` = GeoTag numeric ID (e.g. `28659`) OR device serial number (e.g. `GeoTag-57559208`)
+- **Query Parameters:**
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `date` | `String` | - | Specific single date in IST (e.g. `2026-10-28`). Automatically filters 00:00:00 to 23:59:59 IST |
+| `startLocationTime` | `String` | 7 days ago | Range start in IST: `YYYY-MM-DD HH:mm:ss` (URL-encoded) |
+| `endLocationTime` | `String` | now | Range end in IST: `YYYY-MM-DD HH:mm:ss` (URL-encoded) |
+| `beginTime` | `Number` | 7 days ago | Range start in Unix milliseconds (e.g. `1793125800000`) |
+| `endTime` | `Number` | now | Range end in Unix milliseconds (e.g. `1793212199999`) |
+| `days` | `Number` | `7` | Past days fallback if dates are omitted |
+
+#### Request Examples:
+
+**By specific single date (IST):**
+```http
+GET /api/devices/28659/history?date=2026-10-28 HTTP/1.1
+Host: localhost:4000
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**By date-time range (IST):**
+```http
+GET /api/devices/28659/history?startLocationTime=2026-10-27%2000%3A00%3A00&endLocationTime=2026-10-29%2023%3A59%3A59 HTTP/1.1
+Host: localhost:4000
+Authorization: Bearer <JWT_TOKEN>
+```
+
+**By Millisecond Timestamps:**
+```http
+GET /api/devices/GeoTag-57559208/history?beginTime=1793039400000&endTime=1793298599999 HTTP/1.1
+Host: localhost:4000
+Authorization: Bearer <JWT_TOKEN>
+```
+
+#### Response (200 OK):
+```json
+{
+  "success": true,
+  "sn": "GeoTag-57559208",
+  "identifier": "28659",
+  "total": 198,
+  "timeRange": {
+    "timezone": "Asia/Kolkata (IST, UTC+05:30)",
+    "beginTime": 1793039400000,
+    "endTime": 1793298599999,
+    "startLocationTime": "2026-10-27 00:00:00",
+    "endLocationTime": "2026-10-29 23:59:59"
+  },
+  "history": [
+    {
+      "sn": "GeoTag-57559208",
+      "lat": 21.1286658,
+      "lng": 79.1037818,
+      "address": "Chandan Nagar, Nagpur, Maharashtra, 440024, India",
+      "locationTime": 1793249294000,
+      "locationTimeIST": "2026-10-29 10:18:14",
+      "reportedTime": 1793249432000,
+      "reportedTimeIST": "2026-10-29 10:20:32",
+      "battery": 100,
+      "batteryStatus": "OK",
+      "accuracy": 98,
+      "confidence": 139
+    }
+  ],
+  "list": [ ... ],
+  "data": [ ... ]
 }
 ```
 
@@ -364,22 +460,36 @@ Allows SuperAdmin (or School Admin) to assign a device to a School, Branch, Supe
 
 ### 5. Sync from GeoTag Cloud
 
-Pulls all devices registered in your GeoTag Cloud account and adds new ones to your MongoDB collection. **Existing assignments (school, branch, child) are preserved and never overwritten.**
+Pulls all devices registered in your GeoTag Cloud account and adds new ones to your MongoDB collection. **Existing assignments (school, branch, child) are preserved and never overwritten.** Also stores `deviceId` (numeric GeoTag ID) for each device, which enables the trajectory proxy API.
 
-- **URL:** `POST /api/ble-devices/sync`
+- **URL:** `GET /api/ble-devices/sync` *(no token needed)*
+- **URL:** `POST /api/ble-devices/sync` *(requires JWT)*
 
 #### Response Example (200 OK):
 ```json
 {
   "success": true,
-  "message": "Sync completed successfully",
+  "message": "Successfully synced 21 devices from GeoTag Cloud",
+  "total": 21,
   "summary": {
     "totalFromCloud": 21,
     "synced": 21,
-    "errors": []
-  }
+    "cloudApiStatus": "Connected"
+  },
+  "devices": [
+    {
+      "_id": "6ae076a6ad042369b9f4cf04",
+      "sn": "GeoTag-57559208",
+      "deviceId": "28659",
+      "name": "Aarav School Bag Tag",
+      "battery": 100,
+      "status": "active"
+    }
+  ]
 }
 ```
+
+> **Fallback:** If GeoTag Cloud is unreachable, returns all devices already stored in MongoDB from previous syncs and webhook pings.
 
 ---
 
@@ -403,11 +513,13 @@ Removes a BLE Device from MongoDB.
 
 Direct pass-through endpoints to inspect raw GeoTag cloud responses.
 
-- `GET /api/devices?page=1&pageSize=10` - Raw device list from cloud
-- `GET /api/devices/:uuid` - Raw device detail from cloud
-- `GET /api/devices/:sn/history` - Raw location history array from cloud
+- `GET /api/devices?page=1&pageSize=10` — Raw device list from GeoTag Cloud
+- `GET /api/devices/:uuid` — Raw device detail from GeoTag Cloud
+- `GET /api/devices/:deviceId/history` — Device trajectory / history (see section 2d above)
 
-*Requires: `Authorization: Bearer <TOKEN>` with `superAdmin` role.*
+*Requires: `Authorization: Bearer <TOKEN>`*
+
+> **Env Variable:** Uses `GEOTAG_BASE_URL=https://api.geotag.top` with merchant RSA private key signature and AES encryption.
 
 ---
 
@@ -429,6 +541,7 @@ GeoTag Cloud officially supports real-time webhooks. When enabled, **GeoTag imme
 #### What happens on incoming Webhook:
 * Automatically decrypts payload using your `merchant_private.pem`.
 * Updates `lastLocation` (lat, lng, address, timestamps, accuracy) and `battery` / `batteryStatus` in MongoDB.
+* **Stores/updates `deviceId`** — the numeric GeoTag ID (from the `id` field in the payload) is always saved and kept current so the trajectory API works correctly.
 * **100% Preserves your custom `category`** (`"ID Card"`, `"Bag"`), custom `name`, and school/branch/child hierarchy assignments.
 * Returns `{ "code": 200, "msg": "success" }` to GeoTag Cloud.
 

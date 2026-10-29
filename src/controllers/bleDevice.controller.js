@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import { BLEDevice } from '../Models/bleDevice.model.js';
 import { geotagService } from '../services/geotag.service.js';
 import { dbConnections } from '../Database/db.js';
+import { parseToISTTimestamp, formatISTDate, extractPointTimestamp } from '../utils/time.helper.js';
 
 const ObjectId = mongoose.Types.ObjectId;
 
@@ -26,6 +27,26 @@ function getUserContext(req) {
       ? JSON.parse(req.headers['x-assigned-branch'])
       : (req.query.assignedBranch ? [req.query.assignedBranch] : []),
   };
+}
+
+/**
+ * Safely resolves a native or Mongoose collection regardless of connection wrapper
+ */
+function getDbCollection(collectionName) {
+  if (mongoose.connection && mongoose.connection.db) {
+    return mongoose.connection.db.collection(collectionName);
+  }
+  if (mongoose.connection && typeof mongoose.connection.collection === 'function') {
+    return mongoose.connection.collection(collectionName);
+  }
+  if (dbConnections.db2 && typeof dbConnections.db2.collection === 'function') {
+    return dbConnections.db2.collection(collectionName);
+  }
+  const modelName = collectionName === 'children' ? 'Child' : (collectionName === 'schools' ? 'School' : (collectionName === 'branches' ? 'Branch' : null));
+  if (modelName && mongoose.models && mongoose.models[modelName]) {
+    return mongoose.models[modelName].collection;
+  }
+  throw new Error(`Database connection not ready for collection '${collectionName}'`);
 }
 
 /**
@@ -75,8 +96,7 @@ export const getBLEDevices = async (req, res) => {
       match.supervisorId = new ObjectId(id);
     } else if (role === "parent") {
       // Find all children belonging to this parent
-      const db = dbConnections.db2 || mongoose.connection;
-      const children = await db.collection("children").find({ parentId: new ObjectId(id) }).toArray();
+      const children = await getDbCollection("children").find({ parentId: new ObjectId(id) }).toArray();
       const childIds = children.map((c) => c._id);
       match.childId = { $in: childIds };
     } else {
@@ -284,8 +304,7 @@ export const getLiveTrack = async (req, res) => {
       return res.status(403).json({ success: false, message: "Unauthorized for this device" });
     }
     if (role === "parent") {
-      const db = dbConnections.db2 || mongoose.connection;
-      const child = await db.collection("children").findOne({ _id: device.childId, parentId: new ObjectId(id) });
+      const child = await getDbCollection("children").findOne({ _id: device.childId, parentId: new ObjectId(id) });
       if (!child) {
         return res.status(403).json({ success: false, message: "Unauthorized for this child device" });
       }
@@ -319,19 +338,18 @@ export const getLiveTrack = async (req, res) => {
     }
 
     // Populate metadata for response
-    const db = dbConnections.db2 || mongoose.connection;
     let school = null;
     let branch = null;
     let child = null;
 
     if (device.schoolId) {
-      school = await db.collection("schools").findOne({ _id: device.schoolId }, { projection: { schoolName: 1 } });
+      school = await getDbCollection("schools").findOne({ _id: device.schoolId }, { projection: { schoolName: 1 } });
     }
     if (device.branchId) {
-      branch = await db.collection("branches").findOne({ _id: device.branchId }, { projection: { branchName: 1 } });
+      branch = await getDbCollection("branches").findOne({ _id: device.branchId }, { projection: { branchName: 1 } });
     }
     if (device.childId) {
-      child = await db.collection("children").findOne({ _id: device.childId }, { projection: { childName: 1, className: 1, rollNumber: 1 } });
+      child = await getDbCollection("children").findOne({ _id: device.childId }, { projection: { childName: 1, className: 1, rollNumber: 1 } });
     }
 
     res.status(200).json({
@@ -399,8 +417,7 @@ export const getLiveTrackAll = async (req, res) => {
       if (!id) return res.status(400).json({ success: false, message: "Supervisor ID required" });
       match.supervisorId = new ObjectId(id);
     } else if (role === "parent") {
-      const db = dbConnections.db2 || mongoose.connection;
-      const children = await db.collection("children").find({ parentId: new ObjectId(id) }).toArray();
+      const children = await getDbCollection("children").find({ parentId: new ObjectId(id) }).toArray();
       const childIds = children.map((c) => c._id);
       match.childId = { $in: childIds };
     } else {
@@ -534,50 +551,16 @@ export const getLiveTrackAll = async (req, res) => {
   }
 };
 
-function parseTimeInput(val) {
-  if (!val) return null;
-  if (typeof val === 'number') {
-    return val < 1e11 ? val * 1000 : val;
-  }
-  const str = String(val).trim();
-  if (/^\d{10,13}$/.test(str)) {
-    const num = Number(str);
-    return num < 1e11 ? num * 1000 : num;
-  }
-  const parsed = new Date(str).getTime();
-  return isNaN(parsed) ? null : parsed;
-}
-
-function extractPointTimestamp(point) {
-  if (!point) return null;
-  const val = point.locationTime || point.reportedTime || point.time || point.timestamp || point.createTime || point.createdAt;
-  if (!val) return null;
-  if (typeof val === 'number') {
-    return val < 1e11 ? val * 1000 : val;
-  }
-  const str = String(val).trim();
-  if (/^\d{10,13}$/.test(str)) {
-    const num = Number(str);
-    return num < 1e11 ? num * 1000 : num;
-  }
-  const parsed = new Date(str).getTime();
-  return isNaN(parsed) ? null : parsed;
-}
-
-function formatGeoTagDate(ts) {
-  const d = new Date(ts);
-  const pad = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-}
-
 /**
  * 2c. Location History for a specific device (Hierarchy-wise)
  * Fetches tracking breadcrumb points from GeoTag Cloud for a given device.
+ * Parsed in Indian Standard Time (IST, UTC+05:30) and returns all points in the selected range.
  */
 export const getDeviceHistoryHierarchy = async (req, res) => {
   const { role, id, AssignedBranch } = getUserContext(req);
   const { identifier } = req.params;
   const {
+    date,
     beginTime,
     endTime,
     from,
@@ -616,36 +599,36 @@ export const getDeviceHistoryHierarchy = async (req, res) => {
       return res.status(403).json({ success: false, message: "Unauthorized for this device" });
     }
     if (role === "parent") {
-      const db = dbConnections.db2 || mongoose.connection;
-      const child = await db.collection("children").findOne({ _id: device.childId, parentId: new ObjectId(id) });
+      const child = await getDbCollection("children").findOne({ _id: device.childId, parentId: new ObjectId(id) });
       if (!child) {
         return res.status(403).json({ success: false, message: "Unauthorized for this child device" });
       }
     }
 
     const now = Date.now();
-    const parsedBegin =
-      parseTimeInput(beginTime) ||
-      parseTimeInput(from) ||
-      parseTimeInput(startLocationTime) ||
-      parseTimeInput(startDate) ||
-      now - (Number(days) * 24 * 60 * 60 * 1000);
+    let parsedBegin;
+    let parsedEnd;
 
-    const parsedEnd =
-      parseTimeInput(endTime) ||
-      parseTimeInput(to) ||
-      parseTimeInput(endLocationTime) ||
-      parseTimeInput(endDate) ||
-      now;
+    if (date) {
+      parsedBegin = parseToISTTimestamp(date, false);
+      parsedEnd = parseToISTTimestamp(date, true);
+    } else {
+      const rawStart = startLocationTime || beginTime || from || startDate;
+      const rawEnd = endLocationTime || endTime || to || endDate;
 
-    const startLocationTimeStr = formatGeoTagDate(parsedBegin);
-    const endLocationTimeStr = formatGeoTagDate(parsedEnd);
+      parsedBegin = parseToISTTimestamp(rawStart, false) || (now - (Number(days) * 24 * 60 * 60 * 1000));
+      parsedEnd = parseToISTTimestamp(rawEnd, true) || now;
+    }
+
+    const startLocationTimeStr = formatISTDate(parsedBegin);
+    const endLocationTimeStr = formatISTDate(parsedEnd);
 
     const cloudData = await geotagService.getDeviceHistory(device.sn, {
       beginTime: parsedBegin,
       endTime: parsedEnd,
       startLocationTime: startLocationTimeStr,
       endLocationTime: endLocationTimeStr,
+      fetchAll: true,
     });
 
     const rawList = Array.isArray(cloudData)
@@ -655,8 +638,26 @@ export const getDeviceHistoryHierarchy = async (req, res) => {
     // Filter points strictly between parsedBegin and parsedEnd
     const filteredHistory = rawList.filter((item) => {
       const pointTime = extractPointTimestamp(item);
-      if (pointTime === null) return true; // keep if timestamp is missing
+      if (pointTime === null) return true;
       return pointTime >= parsedBegin && pointTime <= parsedEnd;
+    });
+
+    // Enrich with readable IST strings
+    const enrichedHistory = filteredHistory.map((item) => {
+      const locTs = extractPointTimestamp(item);
+      const repTs = item.reportedTime
+        ? (typeof item.reportedTime === 'number'
+            ? (item.reportedTime < 1e11 ? item.reportedTime * 1000 : item.reportedTime)
+            : Number(item.reportedTime))
+        : null;
+
+      return {
+        ...item,
+        locationTime: locTs || item.locationTime,
+        locationTimeIST: locTs ? formatISTDate(locTs) : null,
+        reportedTime: repTs || item.reportedTime,
+        reportedTimeIST: repTs ? formatISTDate(repTs) : null,
+      };
     });
 
     res.status(200).json({
@@ -665,8 +666,17 @@ export const getDeviceHistoryHierarchy = async (req, res) => {
       name: device.name,
       battery: device.battery,
       batteryStatus: device.batteryStatus,
-      totalPoints: filteredHistory.length,
-      history: filteredHistory,
+      totalPoints: enrichedHistory.length,
+      timeRange: {
+        timezone: 'Asia/Kolkata (IST, UTC+05:30)',
+        beginTime: parsedBegin,
+        endTime: parsedEnd,
+        startLocationTime: startLocationTimeStr,
+        endLocationTime: endLocationTimeStr,
+      },
+      history: enrichedHistory,
+      list: enrichedHistory,
+      data: enrichedHistory,
     });
   } catch (err) {
     console.error("Error in getDeviceHistoryHierarchy:", err);
@@ -686,10 +696,9 @@ export const getParentBLEDevice = async (req, res) => {
     }
 
     const parentObjectId = new ObjectId(id);
-    const db = dbConnections.db2 || mongoose.connection;
 
     // Find children of this parent
-    const children = await db.collection("children").find({ parentId: parentObjectId }).toArray();
+    const children = await getDbCollection("children").find({ parentId: parentObjectId }).toArray();
     if (!children || children.length === 0) {
       return res.status(404).json({ success: false, message: "No children found for this parent" });
     }

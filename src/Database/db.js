@@ -3,10 +3,18 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Initialize with mongoose instance so models can define schemas immediately on import
+// Dynamic proxy connection that safely resolves to the active MongoDB database connection
 export const dbConnections = {
-  db1: mongoose,
-  db2: mongoose,
+  get db1() {
+    return mongoose.connection.db || mongoose.connection;
+  },
+  get db2() {
+    return mongoose.connection.db || mongoose.connection;
+  },
+  model(...args) {
+    return mongoose.model(...args);
+  },
+  models: mongoose.models,
 };
 
 function cleanUri(raw) {
@@ -28,7 +36,7 @@ export async function connectDB(mongoUri) {
 
   try {
     const conn = await mongoose.connect(uri);
-    console.log(`🍃 MongoDB Connected: ${conn.connection.host}/${conn.connection.name}`);
+    // console.log(`🍃 MongoDB Connected: ${conn.connection.host}/${conn.connection.name}`);
     return conn;
   } catch (error) {
     console.error(`❌ MongoDB Connection Error: ${error.message}`);

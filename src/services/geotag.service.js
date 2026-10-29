@@ -57,11 +57,15 @@ export class GeoTagService {
   }
 
   /**
-   * Fetch location history for a device
+   * Fetch location history for a device.
+   * GeoTag API paginates descending by time (pageSize max 100).
+   * This method automatically traverses pages until all points up to beginTime are fetched,
+   * or returns a specific page if requested.
+   * 
    * @param {string} sn Device Serial Number (e.g., GeoTag-57559208)
-   * @param {Object} options { beginTime, endTime, startLocationTime, endLocationTime }
+   * @param {Object} options { beginTime, endTime, startLocationTime, endLocationTime, page, pageSize, fetchAll }
    */
-  async getDeviceHistory(sn, { beginTime, endTime, startLocationTime, endLocationTime } = {}) {
+  async getDeviceHistory(sn, { beginTime, endTime, startLocationTime, endLocationTime, page, pageSize, fetchAll = true } = {}) {
     if (!sn) throw new Error('sn is required');
 
     const now = Date.now();
@@ -77,19 +81,58 @@ export class GeoTagService {
     const sTimeStr = startLocationTime || toDateStr(bTime);
     const eTimeStr = endLocationTime || toDateStr(eTime);
 
-    // Provide both numeric timestamps and formatted date strings so GeoTag recognizes either format
-    const payload = {
-      sn,
-      beginTime: bTime,
-      endTime: eTime,
-      startTime: bTime,
-      startLocationTime: sTimeStr,
-      endLocationTime: eTimeStr,
-      startDate: sTimeStr,
-      endDate: eTimeStr,
-    };
+    // If caller specifically requested a single page without auto-fetching all
+    if (!fetchAll || page) {
+      const payload = {
+        sn,
+        page: page || 1,
+        pageSize: pageSize || 100,
+        beginTime: bTime,
+        endTime: eTime,
+        startLocationTime: sTimeStr,
+        endLocationTime: eTimeStr,
+      };
+      return this._request('/device/getHistory', payload);
+    }
 
-    return this._request('/device/getHistory', payload);
+    // Auto-fetch all pages covering the time window
+    const allList = [];
+    let currentPage = 1;
+    const batchSize = 100; // GeoTag's maximum pageSize
+    let totalRecords = Infinity;
+
+    while ((currentPage - 1) * batchSize < totalRecords) {
+      const res = await this._request('/device/getHistory', {
+        sn,
+        page: currentPage,
+        pageSize: batchSize,
+        beginTime: bTime,
+        endTime: eTime,
+        startLocationTime: sTimeStr,
+        endLocationTime: eTimeStr,
+      });
+
+      if (!res || !res.list || !Array.isArray(res.list) || res.list.length === 0) break;
+
+      totalRecords = typeof res.total === 'number' ? res.total : 0;
+      allList.push(...res.list);
+
+      // Since GeoTag returns points descending by locationTime, check the oldest point in this batch
+      const oldestPoint = res.list[res.list.length - 1];
+      const oldestTime = oldestPoint?.locationTime || oldestPoint?.reportedTime;
+      if (oldestTime && bTime && oldestTime < bTime) {
+        // We have covered past the requested beginTime, no need to query older pages
+        break;
+      }
+
+      if (res.list.length < batchSize) break;
+      currentPage++;
+    }
+
+    return {
+      total: allList.length,
+      list: allList,
+    };
   }
 
   /**
