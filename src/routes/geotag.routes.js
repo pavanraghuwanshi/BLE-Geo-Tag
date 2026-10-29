@@ -17,7 +17,7 @@ router.get('/devices', getDevices);
 // GET /api/devices/:uuid - Device detail from GeoTag Cloud
 router.get('/devices/:uuid', getDeviceDetail);
 
-// GET /api/devices/:deviceId/history - Pure proxy to customer.geotag.top trajectoryPageList
-router.get('/devices/:deviceId/history', getDeviceHistory);
+// GET /api/devices/:sn/history - Device location history from GeoTag Cloud by SN
+router.get('/devices/:sn/history', getDeviceHistory);
 
 export default router;

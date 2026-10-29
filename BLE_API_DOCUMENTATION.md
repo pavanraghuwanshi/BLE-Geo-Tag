@@ -300,8 +300,8 @@ Fetches location history directly from the official **GeoTag Open API (`api.geot
 > - **All Data in Range Returned:** Automatically retrieves all records across all pages from GeoTag for the selected time window (no pagination truncation).
 > - **No Web Portal Token Required:** It authenticates server-to-server using merchant credentials, so it never expires and never fails with 401.
 
-- **URL:** `GET /api/devices/:deviceId/history`
-- **URL Parameter:** `:deviceId` = GeoTag numeric ID (e.g. `28659`) OR device serial number (e.g. `GeoTag-57559208`)
+- **URL:** `GET /api/devices/:sn/history`
+- **URL Parameter:** `:sn` = Device serial number (e.g. `GeoTag-57559208`)
 - **Query Parameters:**
 
 | Parameter | Type | Default | Description |
@@ -309,29 +309,20 @@ Fetches location history directly from the official **GeoTag Open API (`api.geot
 | `date` | `String` | - | Specific single date in IST (e.g. `2026-10-28`). Automatically filters 00:00:00 to 23:59:59 IST |
 | `startLocationTime` | `String` | 7 days ago | Range start in IST: `YYYY-MM-DD HH:mm:ss` (URL-encoded) |
 | `endLocationTime` | `String` | now | Range end in IST: `YYYY-MM-DD HH:mm:ss` (URL-encoded) |
-| `beginTime` | `Number` | 7 days ago | Range start in Unix milliseconds (e.g. `1793125800000`) |
-| `endTime` | `Number` | now | Range end in Unix milliseconds (e.g. `1793212199999`) |
-| `days` | `Number` | `7` | Past days fallback if dates are omitted |
+| `refresh` | `Boolean` | `false` | Pass `true` to force bypass in-memory cache and fetch fresh from cloud |
 
 #### Request Examples:
 
 **By specific single date (IST):**
 ```http
-GET /api/devices/28659/history?date=2026-10-28 HTTP/1.1
+GET /api/devices/GeoTag-57559208/history?date=2026-10-28 HTTP/1.1
 Host: localhost:4000
 Authorization: Bearer <JWT_TOKEN>
 ```
 
 **By date-time range (IST):**
 ```http
-GET /api/devices/28659/history?startLocationTime=2026-10-27%2000%3A00%3A00&endLocationTime=2026-10-29%2023%3A59%3A59 HTTP/1.1
-Host: localhost:4000
-Authorization: Bearer <JWT_TOKEN>
-```
-
-**By Millisecond Timestamps:**
-```http
-GET /api/devices/GeoTag-57559208/history?beginTime=1793039400000&endTime=1793298599999 HTTP/1.1
+GET /api/devices/GeoTag-57559208/history?startLocationTime=2026-10-27%2000%3A00%3A00&endLocationTime=2026-10-29%2023%3A59%3A59 HTTP/1.1
 Host: localhost:4000
 Authorization: Bearer <JWT_TOKEN>
 ```
@@ -341,33 +332,28 @@ Authorization: Bearer <JWT_TOKEN>
 {
   "success": true,
   "sn": "GeoTag-57559208",
-  "identifier": "28659",
-  "total": 198,
+  "total": 222,
   "timeRange": {
     "timezone": "Asia/Kolkata (IST, UTC+05:30)",
-    "beginTime": 1793039400000,
-    "endTime": 1793298599999,
     "startLocationTime": "2026-10-27 00:00:00",
     "endLocationTime": "2026-10-29 23:59:59"
   },
   "history": [
     {
       "sn": "GeoTag-57559208",
-      "lat": 21.1286658,
-      "lng": 79.1037818,
-      "address": "Chandan Nagar, Nagpur, Maharashtra, 440024, India",
-      "locationTime": 1793249294000,
-      "locationTimeIST": "2026-10-29 10:18:14",
-      "reportedTime": 1793249432000,
-      "reportedTimeIST": "2026-10-29 10:20:32",
+      "lat": 21.1285607,
+      "lng": 79.1037312,
+      "address": "Block no 07 , Vidarbha premier building, Krida Square Rd, Near Medical Chowk, Hanuman Nagar, Nagpur, Maharashtra",
+      "locationTime": 1793255803000,
+      "locationTimeIST": "2026-10-29 12:06:43",
+      "reportedTime": 1793255941000,
+      "reportedTimeIST": "2026-10-29 12:09:01",
       "battery": 100,
       "batteryStatus": "OK",
       "accuracy": 98,
       "confidence": 139
     }
-  ],
-  "list": [ ... ],
-  "data": [ ... ]
+  ]
 }
 ```
 
