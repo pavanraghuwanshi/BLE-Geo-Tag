@@ -1,7 +1,15 @@
 import mongoose from 'mongoose';
+import NodeCache from 'node-cache';
 import { geotagService } from '../services/geotag.service.js';
 import { BLEDevice } from '../Models/bleDevice.model.js';
 import { parseToISTTimestamp, formatISTDate, extractPointTimestamp } from '../utils/time.helper.js';
+
+// Cache for identifier -> sn resolution (TTL: 2 hours)
+const snResolutionCache = new NodeCache({ stdTTL: 7200, checkperiod: 600 });
+
+// In-memory cache for trajectory/history queries
+// Past dates: long TTL (1 hour); Current date: short TTL (30 seconds)
+const historyCache = new NodeCache({ stdTTL: 60, checkperiod: 120 });
 
 export async function getDevices(req, res) {
   try {
@@ -32,6 +40,7 @@ export async function getDeviceDetail(req, res) {
  * 
  * Supports exact Indian Standard Time (IST, UTC+05:30) date/time range,
  * and returns ALL historical points for the selected range without page-wise limits.
+ * Optimized with in-memory caching and parallel pagination.
  */
 export async function getDeviceHistory(req, res) {
   try {
@@ -41,11 +50,11 @@ export async function getDeviceHistory(req, res) {
       return res.status(400).json({ success: false, message: 'Device identifier is required' });
     }
 
-    // 1. Resolve Serial Number (sn)
-    let targetSn = identifier;
+    // 1. Fast Resolve Serial Number (sn) with in-memory cache
+    let targetSn = snResolutionCache.get(identifier) || identifier;
 
-    // If identifier is numeric (e.g. deviceId "28659") or ObjectId, look up device in MongoDB
-    if (/^\d+$/.test(identifier) || mongoose.Types.ObjectId.isValid(identifier)) {
+    // If identifier is numeric (e.g. deviceId "28659") or ObjectId and not yet cached
+    if (targetSn === identifier && (/^\d+$/.test(identifier) || mongoose.Types.ObjectId.isValid(identifier))) {
       const query = {
         $or: [
           { deviceId: identifier },
@@ -58,6 +67,7 @@ export async function getDeviceHistory(req, res) {
       const device = await BLEDevice.findOne(query).select('sn deviceId').lean();
       if (device && device.sn) {
         targetSn = device.sn;
+        snResolutionCache.set(identifier, targetSn);
       }
     }
 
@@ -88,8 +98,19 @@ export async function getDeviceHistory(req, res) {
     const startLocationTimeStr = formatISTDate(parsedBegin);
     const endLocationTimeStr = formatISTDate(parsedEnd);
 
-    // 3. Call GeoTag Open API via geotagService (authenticated with merchant RSA keys)
-    // Multi-page traversal automatically fetches all points across pages
+    // 3. Check In-Memory Cache (Sub-millisecond response)
+    const cacheKey = `${targetSn}:${parsedBegin}:${parsedEnd}`;
+    const isRefreshRequested = req.query.refresh === 'true' || req.query.sync === 'true';
+
+    if (!isRefreshRequested) {
+      const cachedResponse = historyCache.get(cacheKey);
+      if (cachedResponse) {
+        return res.status(200).json(cachedResponse);
+      }
+    }
+
+    // 4. Call GeoTag Open API via geotagService (authenticated with merchant RSA keys)
+    // Multi-page traversal automatically fetches all points across pages in parallel
     const cloudData = await geotagService.getDeviceHistory(targetSn, {
       beginTime: parsedBegin,
       endTime: parsedEnd,
@@ -102,14 +123,14 @@ export async function getDeviceHistory(req, res) {
       ? cloudData
       : (cloudData?.list || cloudData?.data || cloudData?.records || cloudData?.rows || []);
 
-    // 4. In-memory range filter to strictly guarantee points are within IST range
+    // 5. In-memory range filter to strictly guarantee points are within IST range
     const filteredHistory = rawList.filter((item) => {
       const pointTime = extractPointTimestamp(item);
       if (pointTime === null) return true;
       return pointTime >= parsedBegin && pointTime <= parsedEnd;
     });
 
-    // 5. Enrich each point with readable IST timestamp strings
+    // 6. Enrich each point with readable IST timestamp strings
     const enrichedHistory = filteredHistory.map((item) => {
       const locTs = extractPointTimestamp(item);
       const repTs = item.reportedTime
@@ -127,8 +148,8 @@ export async function getDeviceHistory(req, res) {
       };
     });
 
-    // 6. Return ALL points in selected range (no page-wise truncation)
-    return res.status(200).json({
+    // 7. Build Response Object
+    const responsePayload = {
       success: true,
       sn: targetSn,
       identifier,
@@ -141,9 +162,14 @@ export async function getDeviceHistory(req, res) {
         endLocationTime: endLocationTimeStr,
       },
       history: enrichedHistory,
-      list: enrichedHistory,
-      data: enrichedHistory,
-    });
+    };
+
+    // 8. Cache result: Past dates cached for 1 hour; current/today cached for 30s
+    const isPastDateRange = parsedEnd < (now - 3600000); // Ended more than 1 hour ago
+    const ttlSeconds = isPastDateRange ? 3600 : 30;
+    historyCache.set(cacheKey, responsePayload, ttlSeconds);
+
+    return res.status(200).json(responsePayload);
   } catch (error) {
     console.error('[GeoTag getDeviceHistory Error]:', error.message);
     return res.status(error.code && typeof error.code === 'number' ? error.code : 500).json({

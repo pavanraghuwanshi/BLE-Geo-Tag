@@ -1,6 +1,20 @@
+import https from 'https';
 import axios from 'axios';
 import { config } from '../config/geotag.config.js';
 import { encryptAndSignPayload, decryptResponseData } from '../utils/geotag.crypto.js';
+
+// HTTP Keep-Alive agent to reuse TCP/TLS connections to api.geotag.top
+const httpsAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 50,
+  keepAliveMsecs: 60000,
+});
+
+const apiClient = axios.create({
+  httpsAgent,
+  timeout: 15000,
+  headers: { 'Content-Type': 'application/json' },
+});
 
 export class GeoTagService {
   constructor(customConfig = {}) {
@@ -19,9 +33,7 @@ export class GeoTagService {
       merchantPrivateKey: this.config.merchantPrivateKey,
     });
 
-    const response = await axios.post(url, encryptedBody, {
-      headers: { 'Content-Type': 'application/json' },
-    });
+    const response = await apiClient.post(url, encryptedBody);
 
     const { code, msg, data } = response.data || {};
 
@@ -58,9 +70,7 @@ export class GeoTagService {
 
   /**
    * Fetch location history for a device.
-   * GeoTag API paginates descending by time (pageSize max 100).
-   * This method automatically traverses pages until all points up to beginTime are fetched,
-   * or returns a specific page if requested.
+   * Optimized with parallel multi-page retrieval and HTTP keep-alive.
    * 
    * @param {string} sn Device Serial Number (e.g., GeoTag-57559208)
    * @param {Object} options { beginTime, endTime, startLocationTime, endLocationTime, page, pageSize, fetchAll }
@@ -95,38 +105,55 @@ export class GeoTagService {
       return this._request('/device/getHistory', payload);
     }
 
-    // Auto-fetch all pages covering the time window
-    const allList = [];
-    let currentPage = 1;
     const batchSize = 100; // GeoTag's maximum pageSize
-    let totalRecords = Infinity;
 
-    while ((currentPage - 1) * batchSize < totalRecords) {
-      const res = await this._request('/device/getHistory', {
-        sn,
-        page: currentPage,
-        pageSize: batchSize,
-        beginTime: bTime,
-        endTime: eTime,
-        startLocationTime: sTimeStr,
-        endLocationTime: eTimeStr,
-      });
+    // 1. Fetch Page 1 first
+    const firstRes = await this._request('/device/getHistory', {
+      sn,
+      page: 1,
+      pageSize: batchSize,
+      beginTime: bTime,
+      endTime: eTime,
+      startLocationTime: sTimeStr,
+      endLocationTime: eTimeStr,
+    });
 
-      if (!res || !res.list || !Array.isArray(res.list) || res.list.length === 0) break;
+    if (!firstRes || !firstRes.list || !Array.isArray(firstRes.list) || firstRes.list.length === 0) {
+      return { total: 0, list: [] };
+    }
 
-      totalRecords = typeof res.total === 'number' ? res.total : 0;
-      allList.push(...res.list);
+    const allList = [...firstRes.list];
+    const totalRecords = typeof firstRes.total === 'number' ? firstRes.total : firstRes.list.length;
+    const totalPages = Math.ceil(totalRecords / batchSize);
 
-      // Since GeoTag returns points descending by locationTime, check the oldest point in this batch
-      const oldestPoint = res.list[res.list.length - 1];
-      const oldestTime = oldestPoint?.locationTime || oldestPoint?.reportedTime;
-      if (oldestTime && bTime && oldestTime < bTime) {
-        // We have covered past the requested beginTime, no need to query older pages
-        break;
+    // Check if the oldest point in Page 1 is already older than beginTime
+    const oldestPoint = firstRes.list[firstRes.list.length - 1];
+    const oldestTime = oldestPoint?.locationTime || oldestPoint?.reportedTime;
+
+    // If there are more pages and Page 1 hasn't already covered past beginTime,
+    // fetch all remaining pages in parallel!
+    if (totalPages > 1 && (!oldestTime || !bTime || oldestTime >= bTime)) {
+      const pagePromises = [];
+      for (let p = 2; p <= totalPages; p++) {
+        pagePromises.push(
+          this._request('/device/getHistory', {
+            sn,
+            page: p,
+            pageSize: batchSize,
+            beginTime: bTime,
+            endTime: eTime,
+            startLocationTime: sTimeStr,
+            endLocationTime: eTimeStr,
+          })
+        );
       }
 
-      if (res.list.length < batchSize) break;
-      currentPage++;
+      const results = await Promise.all(pagePromises);
+      for (const res of results) {
+        if (res?.list && Array.isArray(res.list)) {
+          allList.push(...res.list);
+        }
+      }
     }
 
     return {
