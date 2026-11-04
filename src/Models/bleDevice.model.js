@@ -3,6 +3,7 @@ import { dbConnections } from '../Database/db.js';
 import './school.js';
 import './branch.js';
 import './supervisor.js';
+import './child.js';
 
 const bleDeviceSchema = new mongoose.Schema(
   {
@@ -99,23 +100,23 @@ const bleDeviceSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    // Geofence states for real-time breach detection
+    fenceStates: [
+      {
+        fenceId: { type: mongoose.Schema.Types.ObjectId, ref: 'GeotagFence' },
+        status: { type: String, enum: ['inside', 'outside', 'unknown'], default: 'unknown' },
+        lastEvaluatedAt: { type: Date, default: Date.now },
+        lastNotifiedAt: { type: Date, default: null },
+        lastEventType: { type: String, enum: ['ENTER', 'EXIT', null], default: null },
+      },
+    ],
   },
   {
     timestamps: true,
   }
 );
 
-// Ensure Child model schema is registered for Mongoose populate
 const conn = dbConnections.db2 || mongoose;
-if (!conn.models.Child) {
-  conn.model('Child', new mongoose.Schema({
-    childName: String,
-    className: String,
-    rollNumber: String,
-    section: String,
-  }, { timestamps: true }), 'children');
-}
-
 const BLEDevice = conn.model('BLEDevice', bleDeviceSchema, 'BLEDevice');
 
 export { BLEDevice };

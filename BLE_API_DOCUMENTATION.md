@@ -559,3 +559,187 @@ async function loadLiveMarker(deviceId) {
   }
 }
 ```
+
+
+---
+
+## 📍 Geofence Management & Automated Parent Notifications
+
+The backend features a built-in real-time **Geofencing & Alert Engine** triggered automatically by incoming GeoTag device telemetry.
+
+### How It Works:
+1. When a device reports a new coordinate via Webhook, the backend checks active circular or polygon geofences linked to the device, child, branch, or school.
+2. The engine tracks boundary state transitions (`ENTER` and `EXIT`).
+3. If an event occurs (`alarmRules: "exit"`, `"enter"`, or `"both"`), the backend immediately dispatches a high-priority background push notification via **Firebase Cloud Messaging (FCM)** to the assigned child's parent (`parent.fcmToken`).
+4. Every breach event is logged to `GeotagAlert` for audit trails and dashboard display.
+
+---
+
+### 1. Create a Geofence
+- **URL:** `POST /api/geofences`
+- **Headers:** `Authorization: Bearer <TOKEN>`
+- **Request Body (Circular Geofence):**
+```json
+{
+  "name": "Delhi Public School Main Campus",
+  "fenceType": "circle",
+  "center": {
+    "lat": 21.1286332,
+    "lng": 79.1037043
+  },
+  "radius": 250,
+  "alarmRules": "both",
+  "schoolId": "67160ad3f7c469273c524021",
+  "branchId": "67160b1df7c469273c524025",
+  "childId": null,
+  "deviceIds": [],
+  "boundaryToleranceMeter": 5,
+  "cooldownMinutes": 2,
+  "remark": "School boundary"
+}
+```
+
+- **Request Body (Parent Creating Home/Tuition Geofence for Child):**
+Parents only need to pass the fence name, location, and radius. The backend automatically associates it with their child, inherits school/branch, and auto-binds the child's BLE tag:
+```json
+{
+  "name": "Home Perimeter",
+  "fenceType": "circle",
+  "center": {
+    "lat": 21.145800,
+    "lng": 79.088200
+  },
+  "radius": 150,
+  "alarmRules": "both",
+  "childId": "67160ad3f7c469273c524099"
+}
+```
+*(If the parent has only one child, `childId` is even optional as it auto-defaults to their child).*
+
+---
+
+### 2. Get Geofences (Hierarchy-Filtered with Search, Child/Parent Names & Pagination)
+- **URL:** `GET /api/geofences`
+- **Query Parameters:**
+
+| Parameter | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `page` | `Number` | `1` | Page number |
+| `limit` | `Number` | `20` | Items per page |
+| `search` | `String` | `""` | Universal search across fence name, child name, parent name, device name, and SN |
+| `childName` | `String` | `""` | Search specifically by assigned child's name |
+| `parentName` | `String` | `""` | Search specifically by parent's name (also accepts `partName`) |
+| `name` / `fenceName` | `String` | `""` | Filter by specific fence name |
+| `deviceName` | `String` | `""` | Filter by bound device name |
+| `sn` | `String` | `""` | Filter by device serial number |
+| `status` | `String` | `""` | Filter by status (`active` / `inactive`) |
+| `fenceType` | `String` | `""` | Filter by type (`circle` / `polygon`) |
+| `schoolId` | `String` | `""` | Filter by School ID |
+| `branchId` | `String` | `""` | Filter by Branch ID |
+| `childId` | `String` | `""` | Filter by Child ID |
+| `sortBy` | `String` | `"createdAt"` | Field to sort by |
+| `sortOrder` | `String` | `"desc"` | Sort direction: `asc` or `desc` |
+
+- **Response Example (200 OK):**
+```json
+{
+  "success": true,
+  "total": 5,
+  "page": 1,
+  "limit": 20,
+  "totalPages": 1,
+  "hasPrevPage": false,
+  "hasNextPage": false,
+  "fences": [
+    {
+      "_id": "6728e9301fa3829012a9bc41",
+      "name": "Aarav Home Perimeter",
+      "fenceType": "circle",
+      "center": { "lat": 21.1286332, "lng": 79.1037043 },
+      "radius": 250,
+      "alarmRules": "both",
+      "status": "active",
+      "childName": "Aarav Sharma",
+      "parentName": "Rajesh Sharma",
+      "parentMobile": "9876543210",
+      "childId": {
+        "_id": "67160ad3f7c469273c524099",
+        "childName": "Aarav Sharma",
+        "className": "5th",
+        "section": "A",
+        "rollNumber": "12",
+        "parentId": {
+          "_id": "67160ad3f7c469273c524088",
+          "parentName": "Rajesh Sharma",
+          "mobileNo": "9876543210",
+          "email": "rajesh@example.com"
+        }
+      },
+      "schoolId": { "_id": "67160ad3f7c469273c524021", "schoolName": "Delhi Public School" },
+      "branchId": { "_id": "67160b1df7c469273c524025", "branchName": "Nagpur Main Branch" },
+      "devices": [
+        {
+          "_id": "6ae076a6ad042369b9f4cf04",
+          "name": "Aarav School Bag Tag",
+          "sn": "GeoTag-57559208",
+          "battery": 92
+        }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+### 3. Update / Delete Geofence
+* **Update:** `PUT /api/geofences/:id` (passes any updated properties in body)
+* **Delete:** `DELETE /api/geofences/:id` (soft-deletes fence)
+
+---
+
+### 4. Get Geofence Alert History (with Search & Pagination)
+- **URL:** `GET /api/geofences/alerts`
+- **Query Parameters:** `page`, `limit`, `search`, `childName`, `parentName`, `fenceName`, `sn`, `childId`, `fenceId`, `eventType` (`ENTER`/`EXIT`), `startDate`, `endDate`.
+- **Response:**
+```json
+{
+  "success": true,
+  "total": 12,
+  "page": 1,
+  "limit": 20,
+  "totalPages": 1,
+  "hasPrevPage": false,
+  "hasNextPage": false,
+  "alerts": [
+    {
+      "_id": "6728ef110ab28399120bc91a",
+      "fenceName": "Delhi Public School Main Campus",
+      "eventType": "EXIT",
+      "childName": "Aarav Sharma",
+      "parentName": "Rajesh Sharma",
+      "parentMobile": "9876543210",
+      "sn": "GeoTag-57559208",
+      "location": {
+        "lat": 21.126400,
+        "lng": 79.101200,
+        "address": "Chandan Nagar, Nagpur"
+      },
+      "distanceFromCenter": 310,
+      "childId": {
+        "_id": "67160ad3f7c469273c524099",
+        "childName": "Aarav Sharma",
+        "parentId": {
+          "_id": "67160ad3f7c469273c524088",
+          "parentName": "Rajesh Sharma",
+          "mobileNo": "9876543210"
+        }
+      },
+      "notifiedParents": [
+        { "parentName": "Rajesh Sharma", "tokensSentCount": 1 }
+      ],
+      "createdAt": "2026-11-04T09:15:30.000Z"
+    }
+  ]
+}
+```

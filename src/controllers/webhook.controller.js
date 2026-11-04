@@ -1,6 +1,7 @@
 import { config } from '../config/geotag.config.js';
 import { decryptResponseData } from '../utils/geotag.crypto.js';
 import { BLEDevice } from '../Models/bleDevice.model.js';
+import { evaluateGeofencesForDevice } from '../services/geofence.service.js';
 
 /**
  * Handle incoming real-time Webhook from GeoTag Cloud
@@ -65,7 +66,7 @@ export const handleGeoTagWebhook = async (req, res) => {
     }
 
     // 3. Atomically update MongoDB document (always updates deviceId if changed from source)
-    await BLEDevice.findOneAndUpdate(
+    const updatedDevice = await BLEDevice.findOneAndUpdate(
       { sn: payload.sn },
       {
         $set: updateSet,
@@ -82,9 +83,16 @@ export const handleGeoTagWebhook = async (req, res) => {
         },
       },
       { upsert: true, new: true }
-    );
+    ).populate('childId schoolId branchId');
 
-    // 4. Acknowledge GeoTag Cloud
+    // 4. Asynchronously evaluate Geofences & send parent notifications
+    if (lastLocation.lat !== null && lastLocation.lng !== null && updatedDevice) {
+      evaluateGeofencesForDevice(updatedDevice, lastLocation).catch((geoErr) => {
+        console.error(`⚠️ [Webhook Geofence Evaluation Error]:`, geoErr.message);
+      });
+    }
+
+    // 5. Acknowledge GeoTag Cloud
     return res.status(200).json({
       code: 200,
       msg: 'success',

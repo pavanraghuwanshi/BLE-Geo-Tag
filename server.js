@@ -4,6 +4,7 @@ import { config } from './src/config/geotag.config.js';
 import { connectDB } from './src/Database/db.js';
 import geotagRoutes from './src/routes/geotag.routes.js';
 import bleDeviceRoutes from './src/routes/bleDevice.routes.js';
+import geotagFenceRoutes from './src/routes/geotagFence.routes.js';
 import { geotagService } from './src/services/geotag.service.js';
 
 const app = express();
@@ -23,6 +24,7 @@ app.get('/health', (req, res) => {
 // Mount Routes
 app.use('/api', geotagRoutes);
 app.use('/api', bleDeviceRoutes);
+app.use('/api', geotagFenceRoutes);
 
 // Export service for direct usage in other modules/projects
 export { geotagService };
@@ -45,4 +47,3 @@ async function bootstrap() {
 
 bootstrap();
 
-// just testing changes
