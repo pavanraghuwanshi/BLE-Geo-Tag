@@ -1,7 +1,31 @@
+import mongoose from 'mongoose';
 import { GeotagFence } from '../Models/geotagFence.model.js';
 import { GeotagAlert } from '../Models/geotagAlert.model.js';
 import { sendPushNotification } from './notification.service.js';
 import Parent from '../Models/parents.js';
+
+/**
+ * Safely extract an exact single 24-character ObjectId string from any input
+ * Handles populated Documents, plain Objects with _id, ObjectId instances, or hex strings.
+ */
+function getExactId(val) {
+  if (!val) return null;
+  if (val._id) {
+    const idVal = val._id;
+    return idVal && idVal.toString ? idVal.toString() : String(idVal);
+  }
+  if (val instanceof mongoose.Types.ObjectId) {
+    return val.toString();
+  }
+  if (typeof val === 'string' && mongoose.Types.ObjectId.isValid(val)) {
+    return val.trim();
+  }
+  if (val.toString && typeof val.toString === 'function') {
+    const str = val.toString();
+    return mongoose.Types.ObjectId.isValid(str) ? str : null;
+  }
+  return null;
+}
 
 /**
  * Calculate Great-Circle distance between two coordinates in meters (Haversine formula)
@@ -238,8 +262,8 @@ export async function evaluateGeofencesForDevice(device, location) {
         sn: device.sn,
         childId: device.childId?._id || device.childId || null,
         childName,
-        schoolId: device.schoolId?._id || device.schoolId || null,
-        branchId: device.branchId?._id || device.branchId || null,
+        schoolId: device.schoolId?._id || device.schoolId || fence.schoolId?._id || fence.schoolId || null,
+        branchId: device.branchId?._id || device.branchId || fence.branchId?._id || fence.branchId || null,
         eventType,
         location: { lat, lng, address: address || '' },
         distanceFromCenter: distance ? Math.round(distance) : null,

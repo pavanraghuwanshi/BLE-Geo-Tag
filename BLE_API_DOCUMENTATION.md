@@ -670,14 +670,10 @@ Parents only need to pass the fence name, location, and radius. The backend auto
         "className": "5th",
         "section": "A",
         "rollNumber": "12",
-        "parentId": {
-          "_id": "67160ad3f7c469273c524088",
-          "parentName": "Rajesh Sharma",
-          "mobileNo": "9876543210",
-          "email": "rajesh@example.com"
-        }
+        "parentId": "67160ad3f7c469273c524088"
       },
-      "schoolId": { "_id": "67160ad3f7c469273c524021", "schoolName": "Delhi Public School" },
+      "schoolId": { "_id": "67160ad3f7c469273c524021", "schoolName": "Delhi Public School", "email": "dps@example.com" },
+      "branchId": { "_id": "67160b1df7c469273c524025", "branchName": "Nagpur Main Branch", "mobileNo": "9876543210" },
       "branchId": { "_id": "67160b1df7c469273c524025", "branchName": "Nagpur Main Branch" },
       "devices": [
         {

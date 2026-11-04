@@ -123,6 +123,15 @@ export async function createGeofence(req, res) {
       }
     }
 
+    // If childId is provided and schoolId/branchId are not yet set, inherit from Child
+    if (effectiveChildId && (!effectiveSchoolId || !effectiveBranchId)) {
+      const childDoc = await Child.findById(effectiveChildId).select('schoolId branchId');
+      if (childDoc) {
+        if (!effectiveSchoolId && childDoc.schoolId) effectiveSchoolId = new ObjectId(childDoc.schoolId);
+        if (!effectiveBranchId && childDoc.branchId) effectiveBranchId = new ObjectId(childDoc.branchId);
+      }
+    }
+
     const fence = await GeotagFence.create({
       name: name.trim(),
       fenceType,
@@ -301,28 +310,18 @@ export async function getGeofences(req, res) {
     const skip = (parsedPage - 1) * parsedLimit;
     const sort = { [sortBy]: sortOrder === 'asc' ? 1 : -1 };
 
-    // Simply populate childId (and inside it parentId, schoolId, branchId), plus direct schoolId, branchId, devices
+    // Simply populate schoolId, branchId, childId (with parentId for parent info), and devices
     const [rawFences, total] = await Promise.all([
       GeotagFence.find(match)
         .populate('schoolId', 'schoolName email')
         .populate('branchId', 'branchName mobileNo')
         .populate({
           path: 'childId',
-          select: 'childName className section rollNumber parentId schoolId branchId mobileNo DOB age gender',
-          populate: [
-            {
-              path: 'parentId',
-              select: 'parentName',
-            },
-            {
-              path: 'schoolId',
-              select: 'schoolName',
-            },
-            {
-              path: 'branchId',
-              select: 'branchName',
-            },
-          ],
+          select: 'childName className section rollNumber parentId mobileNo DOB age gender',
+          populate: {
+            path: 'parentId',
+            select: 'parentName mobileNo email',
+          },
         })
         .populate('devices', 'name sn')
         .sort(sort)
@@ -332,20 +331,46 @@ export async function getGeofences(req, res) {
       GeotagFence.countDocuments(match),
     ]);
 
-    // Format each fence item extracting schoolName, branchName, parentName, childName directly from childId/schoolId/branchId
+    // Format each fence item extracting schoolName, branchName, parentName, childName directly to top-level
+    // while keeping childId clean without duplicated schoolId, branchId, or parentId object
     const fences = rawFences.map((f) => {
-      const child = f.childId || null;
-      const school = f.schoolId || child?.schoolId || null;
-      const branch = f.branchId || child?.branchId || null;
-      const parent = child?.parentId || null;
+      let child = null;
+      let parentName = '';
+      let parentMobile = '';
+
+      if (f.childId) {
+        const parent = f.childId.parentId;
+        if (parent && typeof parent === 'object') {
+          parentName = parent.parentName || '';
+          parentMobile = parent.mobileNo || '';
+        }
+        child = {
+          _id: f.childId._id,
+          childName: f.childId.childName || '',
+          className: f.childId.className || '',
+          section: f.childId.section || '',
+          rollNumber: f.childId.rollNumber || '',
+          DOB: f.childId.DOB || null,
+          age: f.childId.age != null ? f.childId.age : null,
+          gender: f.childId.gender || '',
+          parentId: parent?._id ? parent._id.toString() : (parent ? parent.toString() : null),
+        };
+        if (f.childId.mobileNo) {
+          child.mobileNo = f.childId.mobileNo;
+        }
+      }
+
+      const school = f.schoolId || null;
+      const branch = f.branchId || null;
 
       return {
         ...f,
+        childId: child,
         schoolName: school?.schoolName || '',
         branchName: branch?.branchName || '',
         childName: child?.childName || '',
-        parentName: parent?.parentName || '',
-        parentMobile: parent?.mobileNo || '',
+        parentName,
+        parentMobile,
       };
     });
 
@@ -384,21 +409,11 @@ export async function getGeofenceById(req, res) {
       .populate('branchId', 'branchName mobileNo')
       .populate({
         path: 'childId',
-        select: 'childName className section rollNumber parentId schoolId branchId mobileNo DOB age gender',
-        populate: [
-          {
-            path: 'parentId',
-            select: 'parentName mobileNo email',
-          },
-          {
-            path: 'schoolId',
-            select: 'schoolName email',
-          },
-          {
-            path: 'branchId',
-            select: 'branchName mobileNo',
-          },
-        ],
+        select: 'childName className section rollNumber parentId mobileNo DOB age gender',
+        populate: {
+          path: 'parentId',
+          select: 'parentName mobileNo email',
+        },
       })
       .populate('devices', 'name sn mac battery lastLocation')
       .lean();
@@ -421,20 +436,45 @@ export async function getGeofenceById(req, res) {
       }
     }
 
-    const child = fence.childId || null;
-    const school = fence.schoolId || child?.schoolId || null;
-    const branch = fence.branchId || child?.branchId || null;
-    const parent = child?.parentId || null;
+    let child = null;
+    let parentName = '';
+    let parentMobile = '';
+
+    if (fence.childId) {
+      const parent = fence.childId.parentId;
+      if (parent && typeof parent === 'object') {
+        parentName = parent.parentName || '';
+        parentMobile = parent.mobileNo || '';
+      }
+      child = {
+        _id: fence.childId._id,
+        childName: fence.childId.childName || '',
+        className: fence.childId.className || '',
+        section: fence.childId.section || '',
+        rollNumber: fence.childId.rollNumber || '',
+        DOB: fence.childId.DOB || null,
+        age: fence.childId.age != null ? fence.childId.age : null,
+        gender: fence.childId.gender || '',
+        parentId: parent?._id ? parent._id.toString() : (parent ? parent.toString() : null),
+      };
+      if (fence.childId.mobileNo) {
+        child.mobileNo = fence.childId.mobileNo;
+      }
+    }
+
+    const school = fence.schoolId || null;
+    const branch = fence.branchId || null;
 
     return res.json({
       success: true,
       fence: {
         ...fence,
+        childId: child,
         schoolName: school?.schoolName || '',
         branchName: branch?.branchName || '',
         childName: child?.childName || '',
-        parentName: parent?.parentName || '',
-        parentMobile: parent?.mobileNo || '',
+        parentName,
+        parentMobile,
       },
     });
   } catch (err) {
@@ -492,21 +532,11 @@ export async function updateGeofence(req, res) {
       .populate('branchId', 'branchName mobileNo')
       .populate({
         path: 'childId',
-        select: 'childName className section rollNumber parentId schoolId branchId',
-        populate: [
-          {
-            path: 'parentId',
-            select: 'parentName mobileNo email',
-          },
-          {
-            path: 'schoolId',
-            select: 'schoolName email',
-          },
-          {
-            path: 'branchId',
-            select: 'branchName mobileNo',
-          },
-        ],
+        select: 'childName className section rollNumber parentId mobileNo DOB age gender',
+        populate: {
+          path: 'parentId',
+          select: 'parentName mobileNo email',
+        },
       })
       .populate('devices', 'name sn mac battery lastLocation')
       .lean();
@@ -515,21 +545,46 @@ export async function updateGeofence(req, res) {
       return res.status(404).json({ success: false, message: 'Geofence not found' });
     }
 
-    const child = updated.childId || null;
-    const school = updated.schoolId || child?.schoolId || null;
-    const branch = updated.branchId || child?.branchId || null;
-    const parent = child?.parentId || null;
+    let child = null;
+    let parentName = '';
+    let parentMobile = '';
+
+    if (updated.childId) {
+      const parent = updated.childId.parentId;
+      if (parent && typeof parent === 'object') {
+        parentName = parent.parentName || '';
+        parentMobile = parent.mobileNo || '';
+      }
+      child = {
+        _id: updated.childId._id,
+        childName: updated.childId.childName || '',
+        className: updated.childId.className || '',
+        section: updated.childId.section || '',
+        rollNumber: updated.childId.rollNumber || '',
+        DOB: updated.childId.DOB || null,
+        age: updated.childId.age != null ? updated.childId.age : null,
+        gender: updated.childId.gender || '',
+        parentId: parent?._id ? parent._id.toString() : (parent ? parent.toString() : null),
+      };
+      if (updated.childId.mobileNo) {
+        child.mobileNo = updated.childId.mobileNo;
+      }
+    }
+
+    const school = updated.schoolId || null;
+    const branch = updated.branchId || null;
 
     return res.json({
       success: true,
       message: 'Geofence updated successfully',
       fence: {
         ...updated,
+        childId: child,
         schoolName: school?.schoolName || '',
         branchName: branch?.branchName || '',
         childName: child?.childName || '',
-        parentName: parent?.parentName || '',
-        parentMobile: parent?.mobileNo || '',
+        parentName,
+        parentMobile,
       },
     });
   } catch (err) {
@@ -704,21 +759,11 @@ export async function getGeofenceAlerts(req, res) {
         .populate('branchId', 'branchName mobileNo')
         .populate({
           path: 'childId',
-          select: 'childName className section rollNumber parentId schoolId branchId',
-          populate: [
-            {
-              path: 'parentId',
-              select: 'parentName mobileNo email',
-            },
-            {
-              path: 'schoolId',
-              select: 'schoolName email',
-            },
-            {
-              path: 'branchId',
-              select: 'branchName mobileNo',
-            },
-          ],
+          select: 'childName className section rollNumber parentId mobileNo DOB age gender',
+          populate: {
+            path: 'parentId',
+            select: 'parentName mobileNo email',
+          },
         })
         .populate('deviceId', 'name sn mac battery lastLocation')
         .sort(sort)
@@ -729,19 +774,48 @@ export async function getGeofenceAlerts(req, res) {
     ]);
 
     // Format alerts with schoolName, branchName, childName, and parentName
+    // while keeping childId clean without duplicated schoolId, branchId, or parentId object
     const alerts = rawAlerts.map((a) => {
-      const child = a.childId || null;
-      const school = a.schoolId || child?.schoolId || null;
-      const branch = a.branchId || child?.branchId || null;
-      const parent = child?.parentId || a.notifiedParents?.[0] || null;
+      let child = null;
+      let parentName = '';
+      let parentMobile = '';
+
+      if (a.childId) {
+        const parent = a.childId.parentId || a.notifiedParents?.[0] || null;
+        if (parent && typeof parent === 'object') {
+          parentName = parent.parentName || '';
+          parentMobile = parent.mobileNo || '';
+        }
+        child = {
+          _id: a.childId._id,
+          childName: a.childId.childName || '',
+          className: a.childId.className || '',
+          section: a.childId.section || '',
+          rollNumber: a.childId.rollNumber || '',
+          DOB: a.childId.DOB || null,
+          age: a.childId.age != null ? a.childId.age : null,
+          gender: a.childId.gender || '',
+          parentId: parent?._id ? parent._id.toString() : (parent ? parent.toString() : null),
+        };
+        if (a.childId.mobileNo) {
+          child.mobileNo = a.childId.mobileNo;
+        }
+      } else if (a.notifiedParents && a.notifiedParents.length > 0) {
+        parentName = a.notifiedParents[0].parentName || '';
+        parentMobile = a.notifiedParents[0].mobileNo || '';
+      }
+
+      const school = a.schoolId || null;
+      const branch = a.branchId || null;
 
       return {
         ...a,
+        childId: child,
         schoolName: school?.schoolName || '',
         branchName: branch?.branchName || '',
         childName: a.childName || child?.childName || '',
-        parentName: parent?.parentName || '',
-        parentMobile: parent?.mobileNo || '',
+        parentName,
+        parentMobile,
       };
     });
 
