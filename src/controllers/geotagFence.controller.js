@@ -360,17 +360,9 @@ export async function getGeofences(req, res) {
         }
       }
 
-      const school = f.schoolId || null;
-      const branch = f.branchId || null;
-
       return {
         ...f,
         childId: child,
-        schoolName: school?.schoolName || '',
-        branchName: branch?.branchName || '',
-        childName: child?.childName || '',
-        parentName,
-        parentMobile,
       };
     });
 
