@@ -4,6 +4,8 @@ import { GeotagAlert } from '../Models/geotagAlert.model.js';
 import { BLEDevice } from '../Models/bleDevice.model.js';
 import Child from '../Models/child.js';
 import Parent from '../Models/parents.js';
+import School from '../Models/school.js';
+import Branch from '../Models/branch.js';
 
 const ObjectId = mongoose.Types.ObjectId;
 
@@ -158,7 +160,7 @@ export async function createGeofence(req, res) {
 }
 
 /**
- * 2. Get Geofences (Hierarchy-Filtered with Search, Child/Parent Name & Pagination)
+ * 2. Get Geofences (Hierarchy-Filtered with Search, Child/Parent/School/Branch Names & Pagination)
  * GET /api/geofences
  */
 export async function getGeofences(req, res) {
@@ -299,19 +301,30 @@ export async function getGeofences(req, res) {
     const skip = (parsedPage - 1) * parsedLimit;
     const sort = { [sortBy]: sortOrder === 'asc' ? 1 : -1 };
 
+    // Simply populate childId (and inside it parentId, schoolId, branchId), plus direct schoolId, branchId, devices
     const [rawFences, total] = await Promise.all([
       GeotagFence.find(match)
         .populate('schoolId', 'schoolName email')
-        .populate('branchId', 'branchName')
+        .populate('branchId', 'branchName mobileNo')
         .populate({
           path: 'childId',
-          select: 'childName className section rollNumber parentId mobileNo DOB age gender',
-          populate: {
-            path: 'parentId',
-            select: 'parentName mobileNo email',
-          },
+          select: 'childName className section rollNumber parentId schoolId branchId mobileNo DOB age gender',
+          populate: [
+            {
+              path: 'parentId',
+              select: 'parentName',
+            },
+            {
+              path: 'schoolId',
+              select: 'schoolName',
+            },
+            {
+              path: 'branchId',
+              select: 'branchName',
+            },
+          ],
         })
-        .populate('devices', 'name sn mac battery lastLocation')
+        .populate('devices', 'name sn')
         .sort(sort)
         .skip(skip)
         .limit(parsedLimit)
@@ -319,12 +332,17 @@ export async function getGeofences(req, res) {
       GeotagFence.countDocuments(match),
     ]);
 
-    // Enhance each fence item with top-level convenience properties
+    // Format each fence item extracting schoolName, branchName, parentName, childName directly from childId/schoolId/branchId
     const fences = rawFences.map((f) => {
       const child = f.childId || null;
+      const school = f.schoolId || child?.schoolId || null;
+      const branch = f.branchId || child?.branchId || null;
       const parent = child?.parentId || null;
+
       return {
         ...f,
+        schoolName: school?.schoolName || '',
+        branchName: branch?.branchName || '',
         childName: child?.childName || '',
         parentName: parent?.parentName || '',
         parentMobile: parent?.mobileNo || '',
@@ -363,14 +381,24 @@ export async function getGeofenceById(req, res) {
 
     const fence = await GeotagFence.findOne({ _id: new ObjectId(id), isActive: true })
       .populate('schoolId', 'schoolName email')
-      .populate('branchId', 'branchName')
+      .populate('branchId', 'branchName mobileNo')
       .populate({
         path: 'childId',
-        select: 'childName className section rollNumber parentId mobileNo DOB age gender',
-        populate: {
-          path: 'parentId',
-          select: 'parentName mobileNo email',
-        },
+        select: 'childName className section rollNumber parentId schoolId branchId mobileNo DOB age gender',
+        populate: [
+          {
+            path: 'parentId',
+            select: 'parentName mobileNo email',
+          },
+          {
+            path: 'schoolId',
+            select: 'schoolName email',
+          },
+          {
+            path: 'branchId',
+            select: 'branchName mobileNo',
+          },
+        ],
       })
       .populate('devices', 'name sn mac battery lastLocation')
       .lean();
@@ -394,12 +422,16 @@ export async function getGeofenceById(req, res) {
     }
 
     const child = fence.childId || null;
+    const school = fence.schoolId || child?.schoolId || null;
+    const branch = fence.branchId || child?.branchId || null;
     const parent = child?.parentId || null;
 
     return res.json({
       success: true,
       fence: {
         ...fence,
+        schoolName: school?.schoolName || '',
+        branchName: branch?.branchName || '',
         childName: child?.childName || '',
         parentName: parent?.parentName || '',
         parentMobile: parent?.mobileNo || '',
@@ -457,14 +489,24 @@ export async function updateGeofence(req, res) {
       { new: true }
     )
       .populate('schoolId', 'schoolName email')
-      .populate('branchId', 'branchName')
+      .populate('branchId', 'branchName mobileNo')
       .populate({
         path: 'childId',
-        select: 'childName className section rollNumber parentId',
-        populate: {
-          path: 'parentId',
-          select: 'parentName mobileNo email',
-        },
+        select: 'childName className section rollNumber parentId schoolId branchId',
+        populate: [
+          {
+            path: 'parentId',
+            select: 'parentName mobileNo email',
+          },
+          {
+            path: 'schoolId',
+            select: 'schoolName email',
+          },
+          {
+            path: 'branchId',
+            select: 'branchName mobileNo',
+          },
+        ],
       })
       .populate('devices', 'name sn mac battery lastLocation')
       .lean();
@@ -474,6 +516,8 @@ export async function updateGeofence(req, res) {
     }
 
     const child = updated.childId || null;
+    const school = updated.schoolId || child?.schoolId || null;
+    const branch = updated.branchId || child?.branchId || null;
     const parent = child?.parentId || null;
 
     return res.json({
@@ -481,6 +525,8 @@ export async function updateGeofence(req, res) {
       message: 'Geofence updated successfully',
       fence: {
         ...updated,
+        schoolName: school?.schoolName || '',
+        branchName: branch?.branchName || '',
         childName: child?.childName || '',
         parentName: parent?.parentName || '',
         parentMobile: parent?.mobileNo || '',
@@ -537,7 +583,7 @@ export async function deleteGeofence(req, res) {
 }
 
 /**
- * 6. Get Geofence Alert History (with Search, Child/Parent Name & Pagination)
+ * 6. Get Geofence Alert History (with Search, Child/Parent/School/Branch Names & Pagination)
  * GET /api/geofences/alerts
  */
 export async function getGeofenceAlerts(req, res) {
@@ -654,13 +700,25 @@ export async function getGeofenceAlerts(req, res) {
     const [rawAlerts, total] = await Promise.all([
       GeotagAlert.find(match)
         .populate('fenceId', 'name fenceType radius center')
+        .populate('schoolId', 'schoolName email')
+        .populate('branchId', 'branchName mobileNo')
         .populate({
           path: 'childId',
-          select: 'childName className section rollNumber parentId',
-          populate: {
-            path: 'parentId',
-            select: 'parentName mobileNo email',
-          },
+          select: 'childName className section rollNumber parentId schoolId branchId',
+          populate: [
+            {
+              path: 'parentId',
+              select: 'parentName mobileNo email',
+            },
+            {
+              path: 'schoolId',
+              select: 'schoolName email',
+            },
+            {
+              path: 'branchId',
+              select: 'branchName mobileNo',
+            },
+          ],
         })
         .populate('deviceId', 'name sn mac battery lastLocation')
         .sort(sort)
@@ -670,12 +728,17 @@ export async function getGeofenceAlerts(req, res) {
       GeotagAlert.countDocuments(match),
     ]);
 
-    // Format alerts with child and parent names
+    // Format alerts with schoolName, branchName, childName, and parentName
     const alerts = rawAlerts.map((a) => {
       const child = a.childId || null;
+      const school = a.schoolId || child?.schoolId || null;
+      const branch = a.branchId || child?.branchId || null;
       const parent = child?.parentId || a.notifiedParents?.[0] || null;
+
       return {
         ...a,
+        schoolName: school?.schoolName || '',
+        branchName: branch?.branchName || '',
         childName: a.childName || child?.childName || '',
         parentName: parent?.parentName || '',
         parentMobile: parent?.mobileNo || '',
