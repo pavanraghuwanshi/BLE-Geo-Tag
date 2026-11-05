@@ -743,3 +743,169 @@ Parents only need to pass the fence name, location, and radius. The backend auto
   ]
 }
 ```
+
+---
+
+### 7. Test Firebase Background Push Notification Delivery
+
+Dedicated test endpoint to verify whether high-priority background push notifications are properly delivering to the mobile app / phone. Dispatches the **exact same FCM payload** used by live geofence events (`ENTER` / `EXIT`).
+
+- **URL:** `POST /api/test/notification`
+- **Alternative URL:** `POST /api/notifications/test`
+- **Auth:** Public / Optional (no Bearer token required for testing)
+
+#### Request Body Options:
+
+You can test by supplying **any ONE** of the following target identifiers:
+
+1. **Direct Phone FCM Token:**
+```json
+{
+  "fcmToken": "c1a2b3c4d5e6...YOUR_MOBILE_FCM_REGISTRATION_TOKEN",
+  "eventType": "ENTER",
+  "childName": "test student",
+  "fenceName": "Home Perimeter"
+}
+```
+
+2. **Parent ID (fetches token from MongoDB):**
+```json
+{
+  "parentId": "6aa39fe347dac31b2398f54f",
+  "eventType": "ENTER"
+}
+```
+
+3. **Parent Mobile Number:**
+```json
+{
+  "mobileNo": "9876543210",
+  "eventType": "ENTER"
+}
+```
+
+4. **Child ID:**
+```json
+{
+  "childId": "6aa3a03347dac31b2398f8f4",
+  "eventType": "EXIT"
+}
+```
+
+5. **Empty Body (`{}`):**
+Automatically picks the first active parent with a registered FCM token in the database.
+
+#### Full Request Parameters Reference:
+| Parameter | Type | Required | Default | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `fcmToken` | `String` | Optional* | - | Direct FCM token of the test device |
+| `tokens` | `Array` | Optional* | - | Array of FCM tokens |
+| `parentId` | `String` | Optional* | - | Target parent's MongoDB `_id` |
+| `mobileNo` | `String` | Optional* | - | Target parent's 10-digit mobile number |
+| `childId` | `String` | Optional* | - | Target child's MongoDB `_id` |
+| `sn` | `String` | Optional* | - | BLE device SN |
+| `eventType` | `String` | Optional | `"ENTER"` | `"ENTER"` or `"EXIT"` |
+| `childName` | `String` | Optional | `"test student"` | Child name to display in notification |
+| `fenceName` | `String` | Optional | `"Home Perimeter"` | Fence name to display in notification |
+| `title` | `String` | Optional | Auto-generated | Custom title override |
+| `body` | `String` | Optional | Auto-generated | Custom body text override |
+| `channelId` | `String` | Optional | `"geofence_alerts"` | Android Notification Channel ID |
+| `sound` | `String` | Optional | `"default"` | Notification sound |
+
+#### Response Example (200 OK):
+```json
+{
+  "success": true,
+  "message": "Notification dispatched successfully to Firebase",
+  "target": {
+    "resolvedFrom": "Direct fcmToken in request body",
+    "tokensCount": 1,
+    "tokens": [
+      "c1a2b3c4d5...1234567890"
+    ]
+  },
+  "firebaseResult": {
+    "successCount": 1,
+    "failureCount": 0,
+    "details": [
+      {
+        "success": true,
+        "messageId": "projects/credence-tracker-faded/messages/0:1730800000000000%12345678"
+      }
+    ],
+    "error": null
+  },
+  "exactPayloadSentToFirebase": {
+    "tokens": ["c1a2b3c4d5...1234567890"],
+    "notification": {
+      "title": "🟢 Arrived: test student",
+      "body": "test student has entered geofence \"Home Perimeter\" at 02:00 PM."
+    },
+    "data": {
+      "eventType": "ENTER",
+      "fenceId": "6aeb224ee055c0de9a9b8ae0",
+      "fenceName": "Home Perimeter",
+      "sn": "GeoTag-57559208",
+      "childId": "6aa3a03347dac31b2398f8f4",
+      "childName": "test student",
+      "lat": "21.1458",
+      "lng": "79.0882",
+      "time": "2026-11-05T08:30:00.000Z",
+      "type": "GEOFENCE_ALERT"
+    },
+    "android": {
+      "priority": "high",
+      "notification": {
+        "sound": "default",
+        "channelId": "geofence_alerts",
+        "color": "#3B82F6",
+        "priority": "high"
+      }
+    },
+    "apns": {
+      "headers": {
+        "apns-priority": "10"
+      },
+      "payload": {
+        "aps": {
+          "sound": "default",
+          "contentAvailable": true,
+          "category": "GEOFENCE_ALERT"
+        }
+      }
+    }
+  }
+}
+```
+
+---
+
+### 8. View Registered Parent Tokens (Helper Endpoint)
+
+Lists all parents in the database with their registered FCM tokens, enabling quick token lookup for testing.
+
+- **URL:** `GET /api/test/notification/parents-tokens`
+- **Alternative URL:** `GET /api/notifications/test/parents-tokens`
+- **Auth:** Public / Optional
+
+#### Response Example (200 OK):
+```json
+{
+  "success": true,
+  "totalParents": 12,
+  "parentsWithTokensCount": 3,
+  "parentsWithoutTokensCount": 9,
+  "parentsWithTokens": [
+    {
+      "_id": "6aa39fe347dac31b2398f54f",
+      "parentName": "test parent",
+      "mobileNo": "9876543210",
+      "notificationEnabled": true,
+      "tokenCount": 1,
+      "tokens": [
+        "c1a2b3c4d5e6f7g8h9i0..."
+      ]
+    }
+  ]
+}
+```

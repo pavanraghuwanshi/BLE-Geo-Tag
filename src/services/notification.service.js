@@ -17,6 +17,8 @@ export async function sendPushNotification({
   body,
   data = {},
   type = 'GEOFENCE_ALERT',
+  channelId = 'geofence_alerts',
+  sound = 'default',
 }) {
   if (!firebaseMessaging) {
     console.warn('⚠️ [Notification Service] Firebase Messaging is not initialized. Skipping push.');
@@ -51,8 +53,8 @@ export async function sendPushNotification({
     android: {
       priority: 'high',
       notification: {
-        sound: 'default',
-        channelId: 'geofence_alerts',
+        sound: sound || 'default',
+        channelId: channelId || 'geofence_alerts',
         color: '#3B82F6',
         priority: 'high',
       },
@@ -63,7 +65,7 @@ export async function sendPushNotification({
       },
       payload: {
         aps: {
-          sound: 'default',
+          sound: sound || 'default',
           contentAvailable: true, // Wakes iOS app in background
           category: type,
         },

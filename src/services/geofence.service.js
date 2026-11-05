@@ -74,15 +74,27 @@ function isWithinSchedule(fence, now = new Date()) {
 
 /**
  * Evaluate all relevant geofences for an incoming device telemetry coordinate
- * Called automatically by webhook whenever a new location is reported.
+ * Called automatically by webhook whenever a new location is reported, or by test API.
  *
  * @param {Object} device - Mongoose BLEDevice document (with populated childId)
  * @param {Object} location - { lat, lng, address, locationTime }
+ * @param {Object} options - Optional overrides for testing: { forceEvent, bypassCooldown, bypassSchedule, previousStatusOverride }
  */
-export async function evaluateGeofencesForDevice(device, location) {
+export async function evaluateGeofencesForDevice(device, location, options = {}) {
   if (!device || !location || location.lat === null || location.lng === null) {
-    return;
+    return {
+      success: false,
+      message: 'Invalid device or coordinates provided',
+      evaluatedCount: 0,
+    };
   }
+
+  const {
+    forceEvent = null, // 'ENTER' | 'EXIT'
+    bypassCooldown = false,
+    bypassSchedule = false,
+    previousStatusOverride = null,
+  } = options;
 
   const { lat, lng, address } = location;
 
@@ -90,23 +102,24 @@ export async function evaluateGeofencesForDevice(device, location) {
   const fenceFilter = {
     status: 'active',
     isActive: true,
-    $or: [
-      { devices: device._id },
-    ],
+    $or: [{ devices: device._id }],
   };
 
-  if (device.childId) {
-    const childId = device.childId._id || device.childId;
-    fenceFilter.$or.push({ childId });
+  const devChildId = getExactId(device.childId);
+  if (devChildId) {
+    fenceFilter.$or.push({ childId: new mongoose.Types.ObjectId(devChildId) });
   }
 
-  if (device.schoolId) {
-    const schoolId = device.schoolId._id || device.schoolId;
-    const branchId = device.branchId?._id || device.branchId;
+  const devSchoolId = getExactId(device.schoolId) || getExactId(device.childId?.schoolId);
+  const devBranchId = getExactId(device.branchId) || getExactId(device.childId?.branchId);
 
-    const schoolBranchQuery = { schoolId };
-    if (branchId) {
-      schoolBranchQuery.$or = [{ branchId }, { branchId: null }];
+  if (devSchoolId) {
+    const schoolBranchQuery = { schoolId: new mongoose.Types.ObjectId(devSchoolId) };
+    if (devBranchId) {
+      schoolBranchQuery.$or = [
+        { branchId: new mongoose.Types.ObjectId(devBranchId) },
+        { branchId: null },
+      ];
     }
     // Also include school-wide fences that aren't device-specific
     fenceFilter.$or.push({
@@ -117,16 +130,25 @@ export async function evaluateGeofencesForDevice(device, location) {
 
   const fences = await GeotagFence.find(fenceFilter);
   if (!fences || fences.length === 0) {
-    return;
+    return {
+      success: true,
+      evaluatedCount: 0,
+      message: 'No active geofences found matching this device, child, or school.',
+      fencesEvaluated: [],
+      alertsCreated: [],
+      notificationsSent: [],
+    };
   }
 
   const now = new Date();
   device.fenceStates = device.fenceStates || [];
 
+  const evaluationResults = [];
+  const alertsCreated = [];
+  const notificationsSent = [];
+
   for (const fence of fences) {
-    if (!isWithinSchedule(fence, now)) {
-      continue;
-    }
+    const isScheduleActive = bypassSchedule || isWithinSchedule(fence, now);
 
     // Determine if device is inside the fence
     let isInside = false;
@@ -161,20 +183,18 @@ export async function evaluateGeofencesForDevice(device, location) {
       device.fenceStates.push(stateEntry);
     }
 
-    const previousStatus = stateEntry.status;
+    const previousStatus = previousStatusOverride || stateEntry.status;
     stateEntry.lastEvaluatedAt = now;
     stateEntry.status = currentStatus;
 
-    // Detect state transition (ignore first initialization if unknown unless specifically configured)
-    let eventType = null;
-    if (previousStatus === 'outside' && currentStatus === 'inside') {
-      eventType = 'ENTER';
-    } else if (previousStatus === 'inside' && currentStatus === 'outside') {
-      eventType = 'EXIT';
-    }
-
+    // Detect state transition (ignore first initialization if unknown unless forced)
+    let eventType = forceEvent ? String(forceEvent).toUpperCase() : null;
     if (!eventType) {
-      continue;
+      if (previousStatus === 'outside' && currentStatus === 'inside') {
+        eventType = 'ENTER';
+      } else if (previousStatus === 'inside' && currentStatus === 'outside') {
+        eventType = 'EXIT';
+      }
     }
 
     // Check if fence triggers on this event rule
@@ -184,20 +204,66 @@ export async function evaluateGeofencesForDevice(device, location) {
       (rule === 'enter' && eventType === 'ENTER') ||
       (rule === 'exit' && eventType === 'EXIT');
 
-    if (!ruleMatches) {
+    // Check cooldown period (to prevent fluttering on border)
+    const cooldownMs = (fence.cooldownMinutes || 2) * 60 * 1000;
+    const isWithinCooldown =
+      !bypassCooldown &&
+      stateEntry.lastNotifiedAt &&
+      now - new Date(stateEntry.lastNotifiedAt).getTime() < cooldownMs;
+
+    const fenceReport = {
+      fenceId: fence._id,
+      fenceName: fence.name,
+      fenceType: fence.fenceType,
+      isInside,
+      distanceMeters: distance ? Math.round(distance) : null,
+      radiusMeters: fence.radius || 200,
+      boundaryToleranceMeters: fence.boundaryToleranceMeter || 0,
+      previousStatus,
+      currentStatus,
+      transition: eventType,
+      alarmRule: rule,
+      ruleMatches,
+      cooldownMinutes: fence.cooldownMinutes || 2,
+      isWithinCooldown,
+      isScheduleActive,
+      alertTriggered: false,
+      reason: '',
+    };
+
+    if (!isScheduleActive) {
+      fenceReport.reason = 'Outside active schedule window';
+      evaluationResults.push(fenceReport);
       continue;
     }
 
-    // Check cooldown period (to prevent fluttering on border)
-    const cooldownMs = (fence.cooldownMinutes || 2) * 60 * 1000;
-    if (stateEntry.lastNotifiedAt && now - new Date(stateEntry.lastNotifiedAt).getTime() < cooldownMs) {
-      // console.log(`⏳ [Geofence] Suppressed ${eventType} for ${fence.name} (within cooldown)`);
+    if (!eventType) {
+      fenceReport.reason =
+        previousStatus === 'unknown'
+          ? `Initial state recorded as "${currentStatus}" (baseline created, no transition yet)`
+          : `No transition detected (remains "${currentStatus}")`;
+      evaluationResults.push(fenceReport);
+      continue;
+    }
+
+    if (!ruleMatches) {
+      fenceReport.reason = `Alarm rule "${rule}" does not trigger on ${eventType} events`;
+      evaluationResults.push(fenceReport);
+      continue;
+    }
+
+    if (isWithinCooldown) {
+      fenceReport.reason = `Suppressed by cooldown period (${fence.cooldownMinutes || 2} min)`;
+      evaluationResults.push(fenceReport);
       continue;
     }
 
     // Event Confirmed! Record and Notify
     stateEntry.lastNotifiedAt = now;
     stateEntry.lastEventType = eventType;
+    fenceReport.alertTriggered = true;
+    fenceReport.reason = `Event confirmed: ${eventType} detected and alert recorded`;
+    evaluationResults.push(fenceReport);
 
     const childName = device.childId?.childName || 'Child';
     const actionText = eventType === 'ENTER' ? 'entered' : 'left';
@@ -244,31 +310,47 @@ export async function evaluateGeofencesForDevice(device, location) {
             },
           });
 
-          notifiedParentsList.push({
+          const notificationRecord = {
             parentId: parent._id,
             parentName: parent.parentName,
             tokensSentCount: pushResult.successCount || 0,
-          });
+            successCount: pushResult.successCount || 0,
+            failureCount: pushResult.failureCount || 0,
+          };
+          notifiedParentsList.push(notificationRecord);
+          notificationsSent.push(notificationRecord);
         }
       }
     }
 
     // 3. Log alert into GeotagAlert collection
     try {
-      await GeotagAlert.create({
+      const exactChildId = getExactId(device.childId) || getExactId(fence.childId);
+      const exactSchoolId =
+        getExactId(fence.schoolId) ||
+        getExactId(device.schoolId) ||
+        getExactId(device.childId?.schoolId);
+      const exactBranchId =
+        getExactId(fence.branchId) ||
+        getExactId(device.branchId) ||
+        getExactId(device.childId?.branchId);
+
+      const alertDoc = await GeotagAlert.create({
         fenceId: fence._id,
         fenceName: fence.name,
         deviceId: device._id,
         sn: device.sn,
-        childId: device.childId?._id || device.childId || null,
+        childId: exactChildId ? new mongoose.Types.ObjectId(exactChildId) : null,
         childName,
-        schoolId: device.schoolId?._id || device.schoolId || fence.schoolId?._id || fence.schoolId || null,
-        branchId: device.branchId?._id || device.branchId || fence.branchId?._id || fence.branchId || null,
+        schoolId: exactSchoolId ? new mongoose.Types.ObjectId(exactSchoolId) : null,
+        branchId: exactBranchId ? new mongoose.Types.ObjectId(exactBranchId) : null,
         eventType,
         location: { lat, lng, address: address || '' },
         distanceFromCenter: distance ? Math.round(distance) : null,
         notifiedParents: notifiedParentsList,
       });
+
+      alertsCreated.push(alertDoc);
     } catch (logErr) {
       console.error('⚠️ [Geofence Alert Log Error]:', logErr.message);
     }
@@ -276,5 +358,13 @@ export async function evaluateGeofencesForDevice(device, location) {
 
   // Persist updated fenceStates on the device document
   await device.save();
+
+  return {
+    success: true,
+    evaluatedCount: fences.length,
+    fencesEvaluated: evaluationResults,
+    alertsCreated,
+    notificationsSent,
+  };
 }
 
